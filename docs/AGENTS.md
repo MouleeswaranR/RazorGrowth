@@ -21,9 +21,11 @@ graph TD
         PG["PermissionGateService\n(Dynamic Margin & Cost Limits)"]
     end
 
-    subgraph LLM["Cognitive Intelligence"]
+    subgraph LLM["Cognitive Intelligence & Multi-Provider Cascade"]
         PROMPTS["Central Prompt Registry\n(app/config/prompts.py)"]
-        LLM_SVC["LLMService\n(OpenRouter / Claude / GPT-4o)"]
+        LLM_SVC["LLMProviderService\n(NVIDIA NIM / OpenRouter / Groq / Mistral)"]
+        REACT["AgenticOrchestrator\n(Bounded Tool-Calling Loop)"]
+        RAG["VectorMemoryService\n(ChromaDB + FastEmbed 384d)"]
     end
 
     GMA -->|1. Filter Cohort| CA
@@ -37,6 +39,8 @@ graph TD
     GMA -->|5. Split & Measure| EA
     EA -->|Experiment Metrics Output| GMA
     GMA -->|6. Strategic Synthesis| LLM_SVC
+    REACT <-->|Tool Dispatch| GMA
+    REACT <-->|Episodic Citations| RAG
     PROMPTS --> LLM_SVC
 ```
 
@@ -155,13 +159,13 @@ class GrowthManagerAgent:
 - **File**: `app/agents/experiment_agent.py`
 - **Role**: Configures randomized cohort splits (80% Treatment / 20% Control) and evaluates mathematical conversion lift, absolute percentage point differences, and counterfactual incremental GMV.
 - **Formulas**:
-  - Treatment Conversion Rate: $CR_T = \frac{\text{Conversions}_T}{\text{Total}_T}$
-  - Control Conversion Rate: $CR_C = \frac{\text{Conversions}_C}{\text{Total}_C}$
-  - Absolute Difference: $\Delta_{pp} = (CR_T - CR_C) \times 100$
-  - Relative Lift (when $CR_C > 0$): $\text{Lift} = \frac{CR_T - CR_C}{CR_C} \times 100$
-  - Relative Lift (when $CR_C = 0$): Handled cleanly as `"N/A (control = 0%)"` to prevent division by zero.
-  - Incremental Orders: $O_{\text{inc}} = \text{Conversions}_T - (\text{Total}_T \times CR_C)$
-  - Incremental Revenue: $\text{GMV}_{\text{inc}} = O_{\text{inc}} \times \text{AOV}$
+  - Treatment Conversion Rate: `CR_T = Conversions_T / Total_T`
+  - Control Conversion Rate: `CR_C = Conversions_C / Total_C`
+  - Absolute Difference: `Delta_pp = (CR_T - CR_C) * 100`
+  - Relative Lift (when `CR_C > 0`): `Lift = ((CR_T - CR_C) / CR_C) * 100`
+  - Relative Lift (when `CR_C = 0`): Handled cleanly as `"N/A (control = 0%)"` to prevent division by zero.
+  - Incremental Orders: `Orders_inc = Conversions_T - (Total_T * CR_C)`
+  - Incremental Revenue: `GMV_inc = Orders_inc * AOV`
 - **Output Schema**: `ExperimentMetricsOutput`
 
 ---
@@ -172,9 +176,35 @@ class GrowthManagerAgent:
 - **Role**: Acts as a deterministic security firewall before any action is executed. Evaluates whether a proposed campaign violates store safety guardrails.
 - **Dynamic Guardrail Thresholds**:
   - `max_auto_discount`: 20.0%
-  - `max_auto_audience`: $\max(50, \min(300, 0.15 \times \text{total\_customers}))$
-  - `max_auto_budget`: $\min(50000, \max(5000, 0.05 \times \text{total\_gmv}))$
+  - `max_auto_audience`: `max(50, min(300, 0.15 * total_customers))`
+  - `max_auto_budget`: `min(50000, max(5000, 0.05 * total_gmv))`
 - **Evaluation Statuses**:
   - `AUTO_APPROVED`: Campaign parameters satisfy all cost, audience, and discount limits. Executable immediately.
   - `REQUIRES_MERCHANT_APPROVAL`: Triggers interactive merchant review in the UI with one-click override or safe audience cap options.
   - `REJECTED`: Campaign violates absolute hard limits (> 50% discount).
+
+---
+
+## 4. Multi-Provider LLM & ReAct Tool-Calling Architecture
+
+### 4.1 Zero-Downtime Provider Cascade
+`LLMProviderService` (`app/services/llm_provider_service.py`) manages automatic multi-model failover:
+
+1. **Primary**: `nvidia_nim` (`meta/llama-3.3-70b-instruct`) — Ultra low-latency tool-calling and reasoning.
+2. **Fallback 1**: `openrouter` (`deepseek/deepseek-chat`) — High-precision economic reasoning.
+3. **Fallback 2**: `groq` (`llama-3.3-70b-versatile`) — Fast speculative execution.
+4. **Fallback 3**: `mistral` (`mistral-small-latest`) — Concise multilingual reasoning.
+5. **Fallback 4**: **Deterministic Heuristic Engine** — Offline analytical rules guaranteeing 100% operational uptime.
+
+### 4.2 Bounded Agentic ReAct Tool Registry
+`AgenticOrchestrator` (`app/agents/agentic_orchestrator.py`) empowers the LLM to autonomously inspect telemetry and formulate growth plans via 6 domain tools (`app/agents/tool_registry.py`):
+
+| Tool Name | Scope | Capability |
+|---|---|---|
+| `get_merchant_context` | PostgreSQL Live Telemetry | Ingests active store GMV, customer count, and payment success rates. |
+| `detect_opportunities` | Analytical Intelligence | Discovers ranked revenue leaks and estimated GMV impacts. |
+| `select_audience` | CustomerAgent | Formulates filtered cohort manifests based on CLV and churn risk. |
+| `recommend_offer` | OfferAgent | Calibrates margin-safe discount parameters and urgency terms. |
+| `recall_similar_past_campaigns` | VectorMemoryService (ChromaDB) | Semantically retrieves historical campaign outcomes via FastEmbed 384-dim dense vectors. |
+| `check_permission_gate` | PermissionGateService | Validates proposed campaigns against dynamic financial guardrails. |
+

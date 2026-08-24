@@ -60,8 +60,9 @@ async def scan_growth_opportunities_live(
     session_id: str | None = None,
     session: AsyncSession = Depends(get_database_session),
 ):
-    """Streams live step-by-step multi-agent growth scan events via SSE as each agent completes."""
+    """Streams live step-by-step multi-agent growth scan events via SSE with natural step pacing."""
     import json
+    import asyncio
     agent = GrowthManagerAgent()
 
     async def event_generator():
@@ -73,6 +74,9 @@ async def scan_growth_opportunities_live(
                 step_data=event.data if isinstance(event.data, dict) else {"content": event.data},
             )
             yield f"data: {json.dumps(event.model_dump())}\n\n"
+            # Visual pacing delay so each agent step is distinctly visible and inspectable
+            await asyncio.sleep(0.55)
+
         await session.commit()
         yield "data: [DONE]\n\n"
 
@@ -153,7 +157,7 @@ async def get_latest_execution_trace(session_id: str | None = None) -> dict:
     else:
         trace = trace_logger_service.get_latest_trace()
     if not trace:
-        raise HTTPException(status_code=404, detail="No trace found. Run simulation and scan first.")
+        return {"status": "empty", "message": "No trace recorded yet for this session.", "data": None, "steps": {}}
     return {"status": "success", "data": trace}
 
 
@@ -275,31 +279,36 @@ async def cross_reference_sessions(
         top_k=4,
     )
 
-    # Ask LLM to synthesize comparative analysis
-    chat_prompt = (
-        f"Compare the current session ({request.current_session_id}) with "
-        f"{'benchmark session ' + request.target_session_id if request.target_session_id else 'historical vector memories'}.\n\n"
-        f"## Current Session:\n{current_summary}\nAudience: {current_audience}\n\n"
-        f"## Target Session:\n{target_summary}\nAudience: {target_audience}\n\n"
-        f"## Vector Memory Context:\n{similar_memories}\n\n"
-        f"Summarize key differences in conversion lift, incentive strategy, and net incremental GMV in 2-3 concise bullet points."
-    )
+    comparison_narrative = ""
+    if request.target_session_id:
+        # Ask LLM to synthesize comparative analysis
+        chat_prompt = (
+            f"Compare the current session ({request.current_session_id}) with "
+            f"benchmark session {request.target_session_id}.\n\n"
+            f"## Current Session:\n{current_summary}\nAudience: {current_audience}\n\n"
+            f"## Target Session:\n{target_summary}\nAudience: {target_audience}\n\n"
+            f"## Vector Memory Context:\n{similar_memories}\n\n"
+            f"Summarize key differences in conversion lift, incentive strategy, and net incremental GMV in 2-3 concise bullet points."
+        )
 
-    comparison_chat = LLMChatInput(
-        merchant_id=request.current_session_id,
-        session_id=request.current_session_id,
-        query=chat_prompt,
-        total_customers=current_audience.get("total_audience", 50),
-        total_revenue=0.0,
-        dormant_vip_count=0,
-    )
-    analysis = await llm_service.chat_with_merchant(comparison_chat)
+        comparison_chat = LLMChatInput(
+            merchant_id=request.current_session_id,
+            session_id=request.current_session_id,
+            query=chat_prompt,
+            total_customers=current_audience.get("total_audience", 50),
+            total_revenue=0.0,
+            dormant_vip_count=0,
+        )
+        analysis = await llm_service.chat_with_merchant(comparison_chat)
+        comparison_narrative = analysis.reply
+    else:
+        comparison_narrative = f"Retrieved {len(similar_memories)} episodic memory benchmarks from ChromaDB vector store."
 
     return {
         "status": "success",
         "current_session_id": request.current_session_id,
         "target_session_id": request.target_session_id,
-        "comparison_narrative": analysis.reply,
+        "comparison_narrative": comparison_narrative,
         "current_metrics": current_summary,
         "target_metrics": target_summary,
         "vector_memories": similar_memories,

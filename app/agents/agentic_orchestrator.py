@@ -11,9 +11,14 @@ logger = logging.getLogger(__name__)
 
 AGENTIC_SYSTEM_PROMPT = (
     "You are RazorGrowth AI's Autonomous Growth Strategist. "
-    "Your objective is to examine merchant telemetry, recall similar historical campaign outcomes from memory, "
-    "identify high-ROI revenue opportunities, formulate target cohorts and margin-safe offers, "
-    "and verify financial guardrail safety. Use the provided tools to gather data and verify each decision."
+    "Your objective is to execute a rigorous, multi-stage diagnostic loop using your domain tools in sequence: "
+    "1. get_merchant_context: inspect customer base, lifetime GMV, and payment success telemetry.\n"
+    "2. detect_opportunities: run analytical detectors for dormant VIPs, payment friction, and cross-sell gaps.\n"
+    "3. recall_similar_past_campaigns: query ChromaDB 384-dim vector memory for past conversion benchmarks.\n"
+    "4. select_audience: extract and rank the highest-ROI target cohort.\n"
+    "5. recommend_offer: calibrate margin-safe promotional discount parameters.\n"
+    "6. check_permission_gate: verify dynamic safety guardrails before formulating the final plan.\n"
+    "Execute these tools sequentially to gather complete evidence before finalizing your growth strategy."
 )
 
 
@@ -30,7 +35,7 @@ class AgenticOrchestrator:
             {"role": "system", "content": AGENTIC_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"Begin autonomous growth analysis for merchant '{merchant_id}'. Evaluate telemetry, detect opportunities, formulate cohort/offers, and verify safety guardrails.",
+                "content": f"Begin comprehensive autonomous growth analysis for merchant '{merchant_id}'. Execute the 6-stage diagnostic workflow: get store telemetry, detect revenue leaks, recall vector memory benchmarks, select target audience, calibrate margin-safe offers, and verify permission gate guardrails.",
             },
         ]
         steps_taken: list[AgenticStepRecord] = []
@@ -120,7 +125,7 @@ class AgenticOrchestrator:
             {"role": "system", "content": AGENTIC_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"Begin autonomous growth analysis for merchant '{merchant_id}'. Evaluate telemetry, detect opportunities, formulate cohort/offers, and verify safety guardrails.",
+                "content": f"Begin comprehensive autonomous growth analysis for merchant '{merchant_id}'. Execute the 6-stage diagnostic workflow: get store telemetry, detect revenue leaks, recall vector memory benchmarks, select target audience, calibrate margin-safe offers, and verify permission gate guardrails.",
             },
         ]
         steps_taken: list[AgenticStepRecord] = []

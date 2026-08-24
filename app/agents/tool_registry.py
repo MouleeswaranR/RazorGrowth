@@ -106,6 +106,21 @@ class ToolRegistry:
         self._customer_agent = CustomerAgent()
         self._offer_agent = OfferAgent()
 
+    async def _resolve_merchant_records(self, session: AsyncSession, merchant_id: str):
+        """Fetches customer, order, payment, and product records for the target merchant."""
+        customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
+        if not customers:
+            first_cust = (await session.execute(select(CustomerModel))).scalars().first()
+            if first_cust:
+                merchant_id = first_cust.merchant_id
+                customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
+
+        orders = (await session.execute(select(OrderModel).where(OrderModel.merchant_id == merchant_id))).scalars().all()
+        payments = (await session.execute(select(PaymentModel).join(OrderModel, PaymentModel.order_id == OrderModel.id).where(OrderModel.merchant_id == merchant_id))).scalars().all()
+        products = (await session.execute(select(ProductModel).where(ProductModel.merchant_id == merchant_id))).scalars().all()
+
+        return merchant_id, list(customers), list(orders), list(payments), list(products)
+
     async def execute_tool(
         self,
         session: AsyncSession,
@@ -115,25 +130,19 @@ class ToolRegistry:
     ) -> dict[str, Any]:
         """Routes tool execution request to appropriate underlying service."""
         if tool_name == "get_merchant_context":
-            customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
-            orders = (await session.execute(select(OrderModel).where(OrderModel.merchant_id == merchant_id))).scalars().all()
-            payments = (await session.execute(select(PaymentModel).join(OrderModel, PaymentModel.order_id == OrderModel.id).where(OrderModel.merchant_id == merchant_id))).scalars().all()
-            products = (await session.execute(select(ProductModel).where(ProductModel.merchant_id == merchant_id))).scalars().all()
-            return context_engine.build_merchant_growth_context(merchant_id, list(customers), list(orders), list(payments), list(products))
+            resolved_id, customers, orders, payments, products = await self._resolve_merchant_records(session, merchant_id)
+            return context_engine.build_merchant_growth_context(resolved_id, customers, orders, payments, products)
 
         if tool_name == "detect_opportunities":
-            customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
-            orders = (await session.execute(select(OrderModel).where(OrderModel.merchant_id == merchant_id))).scalars().all()
-            payments = (await session.execute(select(PaymentModel).join(OrderModel, PaymentModel.order_id == OrderModel.id).where(OrderModel.merchant_id == merchant_id))).scalars().all()
-            products = (await session.execute(select(ProductModel).where(ProductModel.merchant_id == merchant_id))).scalars().all()
-            opps = detect_all_opportunities(merchant_id, list(customers), list(orders), list(payments), {p.id: p.category for p in products})
+            resolved_id, customers, orders, payments, products = await self._resolve_merchant_records(session, merchant_id)
+            opps = detect_all_opportunities(resolved_id, customers, orders, payments, {p.id: p.category for p in products})
             return {"opportunities_found": len(opps), "opportunities": [{"id": o.id, "title": o.title, "type": o.opportunity_type, "estimated_gmv": o.estimated_gmv_impact, "confidence": o.confidence_score} for o in opps]}
 
         if tool_name == "select_audience":
             opp_type = arguments.get("opportunity_type", "customer_churn_prevention")
-            customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
+            _, customers, _, _, _ = await self._resolve_merchant_records(session, merchant_id)
             target_segment = "VIP Dormant" if opp_type == "customer_churn_prevention" else "Cross-Sell Cohort"
-            selected = self._customer_agent.filter_dormant_high_value_customers(list(customers)) if opp_type == "customer_churn_prevention" else self._customer_agent.filter_active_customers(list(customers))
+            selected = self._customer_agent.filter_dormant_high_value_customers(customers) if opp_type == "customer_churn_prevention" else self._customer_agent.filter_active_customers(customers)
             aud = self._customer_agent.build_structured_audience("agentic_opp", target_segment, selected)
             return {"target_segment": target_segment, "audience_count": aud.total_audience_count, "avg_spend": sum(c.total_spend for c in aud.target_customers) / max(1, len(aud.target_customers)), "reasoning": aud.reasoning}
 

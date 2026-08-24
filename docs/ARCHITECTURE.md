@@ -11,7 +11,7 @@ RazorGrowth AI is an autonomous, event-driven growth engine purpose-built for Ra
 ```mermaid
 graph TD
     subgraph ClientLayer["User Interface and API Gateway"]
-        UI["Merchant Dashboard (HTML5 / Vanilla JS)"]
+        UI["Merchant Dashboard (Next.js 16 / React 19 / TypeScript)"]
         API["FastAPI REST Gateway (/api/v1)"]
     end
 

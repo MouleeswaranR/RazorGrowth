@@ -5,11 +5,13 @@ import { Eye, Brain, Search, ShieldCheck, Send, BarChart3, ChevronRight } from "
 
 interface PipelineVisualizerProps {
   currentStage: number; // 1 to 6
+  isLoopCompleted?: boolean;
   onSelectStage?: (stage: number) => void;
 }
 
 export const PipelineVisualizer: React.FC<PipelineVisualizerProps> = ({
   currentStage,
+  isLoopCompleted = false,
   onSelectStage,
 }) => {
   const stages = [
@@ -68,8 +70,16 @@ export const PipelineVisualizer: React.FC<PipelineVisualizerProps> = ({
             Closed-loop intelligence: from transaction observation to mathematically measured revenue lift.
           </p>
         </div>
-        <div className="text-[11px] font-mono-code text-[var(--text-secondary)]">
-          Stage {currentStage} of 6
+        <div className="flex items-center gap-2">
+          {isLoopCompleted ? (
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono-code font-bold bg-[var(--accent-emerald)] text-white shadow-xs">
+              ✓ Full Loop Closed (All 6 Stages Complete)
+            </span>
+          ) : (
+            <span className="text-[11px] font-mono-code text-[var(--text-secondary)]">
+              Stage {currentStage} of 6
+            </span>
+          )}
         </div>
       </div>
 
@@ -77,18 +87,18 @@ export const PipelineVisualizer: React.FC<PipelineVisualizerProps> = ({
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {stages.map((st) => {
           const Icon = st.icon;
-          const isActive = st.id === currentStage;
-          const isPassed = st.id < currentStage;
+          const isDone = isLoopCompleted ? true : st.id < currentStage;
+          const isActive = !isLoopCompleted && st.id === currentStage;
 
           return (
             <button
               key={st.id}
               onClick={() => onSelectStage?.(st.id)}
               className={`text-left p-3.5 rounded-xl border transition-all duration-150 flex flex-col justify-between cursor-pointer ${
-                isActive
+                isDone
+                  ? "bg-[var(--accent-emerald-subtle)]/40 border-[var(--accent-emerald-border)]"
+                  : isActive
                   ? "bg-[var(--accent-terracotta-subtle)] border-[var(--accent-terracotta-border)] shadow-sm ring-1 ring-[var(--accent-terracotta)]"
-                  : isPassed
-                  ? "bg-[var(--bg-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-card-hover)] opacity-90"
                   : "bg-[var(--bg-card)] border-[var(--border-subtle)] hover:bg-[var(--bg-card-hover)] opacity-70"
               }`}
             >
@@ -96,16 +106,16 @@ export const PipelineVisualizer: React.FC<PipelineVisualizerProps> = ({
                 <div className="flex items-center justify-between mb-2">
                   <div
                     className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                      isActive
+                      isDone
+                        ? "bg-[var(--accent-emerald)] text-white"
+                        : isActive
                         ? "bg-[var(--accent-terracotta)] text-white"
-                        : isPassed
-                        ? "bg-[var(--accent-emerald-subtle)] text-[var(--accent-emerald)]"
                         : "bg-[var(--bg-secondary)] text-[var(--text-muted)]"
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5" />
                   </div>
-                  {isPassed && (
+                  {isDone && (
                     <span className="text-[10px] font-mono-code text-[var(--accent-emerald)] font-bold">
                       ✓ DONE
                     </span>

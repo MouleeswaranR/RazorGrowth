@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output")
 
@@ -26,11 +26,12 @@ class TraceLoggerService:
             except Exception:
                 trace_content = {}
 
+        now_utc = datetime.now(timezone.utc).isoformat()
         trace_content["session_id"] = sid
         trace_content["merchant_id"] = run_id
-        trace_content["last_updated"] = datetime.utcnow().isoformat()
+        trace_content["last_updated"] = now_utc
         trace_content.setdefault("steps", {})[step_name] = {
-            "recorded_at": datetime.utcnow().isoformat(),
+            "recorded_at": now_utc,
             "data": step_data,
         }
 

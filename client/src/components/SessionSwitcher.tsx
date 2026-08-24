@@ -151,8 +151,15 @@ export const SessionSwitcher: React.FC<SessionSwitcherProps> = ({
                           </span>
                         )}
                       </div>
-                      <span className="text-[10px] text-[var(--text-muted)]">
-                        {sess.last_updated ? new Date(sess.last_updated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Recent"}
+                      <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                        {sess.last_updated
+                          ? new Date(sess.last_updated.endsWith("Z") || sess.last_updated.includes("+") ? sess.last_updated : `${sess.last_updated}Z`).toLocaleTimeString("en-IN", {
+                              timeZone: "Asia/Kolkata",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              hour12: true,
+                            })
+                          : "Recent"}
                       </span>
                     </div>
 

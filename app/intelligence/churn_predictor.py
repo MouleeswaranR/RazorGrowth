@@ -1,20 +1,29 @@
-from datetime import datetime
+"""Computes customer churn risk scores using continuous recency decay and spend trajectory."""
+from datetime import datetime, timezone
 from app.models.customer import CustomerModel
 from app.models.order import OrderModel
+from app.intelligence.distribution_thresholds import (
+    MerchantDistributionThresholds,
+    _get_default_fallback_thresholds,
+)
 
 
-def calculate_churn_risk_score(customer: CustomerModel) -> float:
-    """Calculates churn risk between 0.0-1.0 using recency, frequency decay, and spend trajectory."""
-    recency_risk = _compute_recency_risk(customer)
+def calculate_churn_risk_score(
+    customer: CustomerModel,
+    thresholds: MerchantDistributionThresholds | None = None,
+) -> float:
+    """Calculates churn risk between 0.0-1.0 using continuous distribution-aware recency decay."""
+    recency_risk = _compute_recency_risk(customer, thresholds)
     return round(recency_risk, 3)
 
 
 def calculate_churn_risk_with_orders(
     customer: CustomerModel,
     orders: list[OrderModel],
+    thresholds: MerchantDistributionThresholds | None = None,
 ) -> float:
     """Computes enhanced churn risk factoring in purchase interval decay and spend trajectory."""
-    recency_risk = _compute_recency_risk(customer)
+    recency_risk = _compute_recency_risk(customer, thresholds)
     frequency_decay_risk = _compute_frequency_decay_risk(orders)
     spend_decline_risk = _compute_spend_decline_risk(orders)
 
@@ -23,22 +32,28 @@ def calculate_churn_risk_with_orders(
     return round(min(1.0, max(0.0, weighted_risk)), 3)
 
 
-def _compute_recency_risk(customer: CustomerModel) -> float:
-    """Scores churn risk from 0.0-1.0 based on days since last purchase."""
+def _compute_recency_risk(
+    customer: CustomerModel,
+    thresholds: MerchantDistributionThresholds | None = None,
+) -> float:
+    """Scores churn risk from 0.0-1.0 via smooth continuous CDF against merchant recency distribution."""
     if not customer.last_purchase_timestamp:
         return 0.90
-    days_inactive = (datetime.utcnow() - customer.last_purchase_timestamp).days
-    if days_inactive <= 7:
-        return 0.05
-    if days_inactive <= 15:
-        return 0.15
-    if days_inactive <= 30:
-        return 0.40
-    if days_inactive <= 45:
-        return 0.65
-    if days_inactive <= 60:
-        return 0.80
-    return 0.95
+
+    thresh = thresholds or _get_default_fallback_thresholds()
+    now = datetime.now(timezone.utc)
+    ts = customer.last_purchase_timestamp
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+
+    days_inactive = max(0.0, (now - ts).total_seconds() / 86400.0)
+
+    # Smooth continuous curve anchored to merchant median and 80th-percentile dormancy
+    # Low risk when under median, steep rise toward 1.0 as it passes 80th-percentile
+    dormant_anchor = max(14.0, thresh.dormant_recency_p80 * 1.25)
+    normalized_recency = days_inactive / dormant_anchor
+
+    return min(1.0, max(0.02, round(normalized_recency ** 1.15, 3)))
 
 
 def _compute_frequency_decay_risk(orders: list[OrderModel]) -> float:
@@ -48,27 +63,23 @@ def _compute_frequency_decay_risk(orders: list[OrderModel]) -> float:
 
     sorted_orders = sorted(orders, key=lambda o: o.created_at)
     gaps = [
-        (sorted_orders[i + 1].created_at - sorted_orders[i].created_at).days
+        max(1.0, float((sorted_orders[i + 1].created_at - sorted_orders[i].created_at).total_seconds() / 86400.0))
         for i in range(len(sorted_orders) - 1)
     ]
 
     if len(gaps) < 2:
         return 0.50
 
-    first_half_avg = sum(gaps[: len(gaps) // 2]) / len(gaps[: len(gaps) // 2])
-    second_half_avg = sum(gaps[len(gaps) // 2 :]) / len(gaps[len(gaps) // 2 :])
+    midpoint = len(gaps) // 2
+    first_half_avg = sum(gaps[:midpoint]) / max(1, midpoint)
+    second_half_avg = sum(gaps[midpoint:]) / max(1, len(gaps) - midpoint)
 
-    if first_half_avg == 0:
+    if first_half_avg <= 0.0:
         return 0.50
 
     decay_ratio = second_half_avg / first_half_avg
-    if decay_ratio <= 1.0:
-        return 0.10
-    if decay_ratio <= 1.5:
-        return 0.40
-    if decay_ratio <= 2.5:
-        return 0.70
-    return 0.90
+    # Smooth continuous frequency decay scaling
+    return round(min(1.0, max(0.05, 0.35 * decay_ratio)), 3)
 
 
 def _compute_spend_decline_risk(orders: list[OrderModel]) -> float:
@@ -78,17 +89,13 @@ def _compute_spend_decline_risk(orders: list[OrderModel]) -> float:
 
     sorted_orders = sorted(orders, key=lambda o: o.created_at)
     midpoint = len(sorted_orders) // 2
-    early_avg = sum(o.amount for o in sorted_orders[:midpoint]) / midpoint
-    recent_avg = sum(o.amount for o in sorted_orders[midpoint:]) / (len(sorted_orders) - midpoint)
+    early_avg = sum(o.amount for o in sorted_orders[:midpoint]) / max(1, midpoint)
+    recent_avg = sum(o.amount for o in sorted_orders[midpoint:]) / max(1, len(sorted_orders) - midpoint)
 
-    if early_avg == 0:
+    if early_avg <= 0.0:
         return 0.30
 
-    decline_ratio = recent_avg / early_avg
-    if decline_ratio >= 1.0:
-        return 0.05
-    if decline_ratio >= 0.8:
-        return 0.30
-    if decline_ratio >= 0.6:
-        return 0.60
-    return 0.85
+    spend_ratio = recent_avg / early_avg
+    # Continuous spend decay: 1.0 ratio -> 0.05 risk; 0.5 ratio -> 0.70 risk
+    risk = max(0.05, min(0.95, 1.05 - spend_ratio))
+    return round(risk, 3)

@@ -1,5 +1,9 @@
-from collections import Counter
+"""Analyzes payment method performance and identifies underperforming channels."""
 from app.models.payment import PaymentModel
+from app.intelligence.distribution_thresholds import (
+    MerchantDistributionThresholds,
+    _get_default_fallback_thresholds,
+)
 
 
 def analyze_payment_method_performance(
@@ -7,8 +11,8 @@ def analyze_payment_method_performance(
 ) -> dict[str, dict]:
     """Computes success rates and estimated lost GMV per payment method."""
     method_stats: dict[str, dict] = {}
-
     payments_by_method: dict[str, list[PaymentModel]] = {}
+
     for payment in payments:
         payments_by_method.setdefault(payment.payment_method, []).append(payment)
 
@@ -32,18 +36,22 @@ def analyze_payment_method_performance(
 
 def find_underperforming_payment_methods(
     method_stats: dict[str, dict],
-    benchmark_rate: float = 0.92,
+    benchmark_rate: float | None = None,
+    thresholds: MerchantDistributionThresholds | None = None,
 ) -> list[dict]:
-    """Identifies payment methods performing below the benchmark success rate threshold."""
+    """Identifies payment methods performing below the merchant's empirical success rate baseline."""
+    thresh = thresholds or _get_default_fallback_thresholds()
+    effective_benchmark = benchmark_rate if benchmark_rate is not None else thresh.payment_benchmark_rate
+
     underperformers = []
     for method, stats in method_stats.items():
-        if stats["success_rate"] < benchmark_rate and stats["total_transactions"] >= 20:
-            gap = benchmark_rate - stats["success_rate"]
+        if stats["success_rate"] < effective_benchmark and stats["total_transactions"] >= 5:
+            gap = effective_benchmark - stats["success_rate"]
             recoverable_gmv = stats["estimated_lost_gmv"] * 0.60
             underperformers.append({
                 "method": method,
                 "current_rate": stats["success_rate"],
-                "benchmark_rate": benchmark_rate,
+                "benchmark_rate": effective_benchmark,
                 "gap_percentage": round(gap * 100, 2),
                 "estimated_lost_gmv": stats["estimated_lost_gmv"],
                 "recoverable_gmv": round(recoverable_gmv, 2),

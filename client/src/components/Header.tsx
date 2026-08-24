@@ -51,24 +51,14 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="sticky top-0 z-40 w-full backdrop-blur-md bg-[var(--bg-card)]/85 border-b border-[var(--border-subtle)] transition-colors duration-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         {/* Logo & Brand */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-[var(--accent-terracotta)] text-white flex items-center justify-center shadow-sm">
-            <span className="font-serif-claude text-xl font-bold italic leading-none">R</span>
+        <Link href="/" className="flex items-center gap-2.5 group cursor-pointer">
+          <div className="w-8 h-8 rounded-xl bg-[var(--accent-terracotta)] text-white flex items-center justify-center shadow-xs transition-transform group-hover:scale-105">
+            <span className="font-serif-claude text-lg font-bold italic leading-none">R</span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-serif-claude text-xl font-semibold tracking-tight text-[var(--text-primary)]">
-                RazorGrowth AI
-              </span>
-              <span className="badge-claude badge-terracotta text-[10px]">
-                Autonomous Agent
-              </span>
-            </div>
-            <p className="text-[11px] text-[var(--text-muted)] hidden sm:block">
-              Continuous Telemetry & Revenue Growth for Razorpay
-            </p>
-          </div>
-        </div>
+          <span className="font-serif-claude text-xl font-bold tracking-tight text-[var(--text-primary)]">
+            RazorGrowth AI
+          </span>
+        </Link>
 
         {/* Center Status Badges */}
         <div className="hidden md:flex items-center gap-3">

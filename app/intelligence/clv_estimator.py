@@ -1,24 +1,23 @@
+"""Projects 12-month customer lifetime value using continuous frequency scaling and churn risk discounting."""
+import math
 from app.models.customer import CustomerModel
 
 
 def estimate_customer_lifetime_value(customer: CustomerModel) -> float:
-    """Projects 12-month CLV using AOV, frequency, and churn-risk discount factor."""
-    if customer.total_orders_count == 0:
-        return 1500.0
+    """Projects 12-month CLV using continuous frequency scaling and churn-risk discount factor."""
+    orders = float(customer.total_orders_count)
+    if orders <= 0:
+        return round(float(customer.total_spend_amount) or 1500.0, 2)
 
-    average_order_value = customer.total_spend_amount / customer.total_orders_count
-    historical_frequency = customer.total_orders_count
+    average_order_value = float(customer.total_spend_amount) / orders
 
-    # Project forward: customers with more history get a more conservative multiplier
-    if historical_frequency >= 8:
-        annual_frequency_estimate = historical_frequency * 1.2
-    elif historical_frequency >= 3:
-        annual_frequency_estimate = historical_frequency * 1.5
-    else:
-        annual_frequency_estimate = historical_frequency * 2.0
+    # Continuous frequency scaling: smooth curve asymptotically scaling future order run rate
+    # 1 order -> ~1.8x, 3 orders -> ~1.45x, 10 orders -> ~1.20x
+    frequency_multiplier = 1.15 + (0.75 / (1.0 + 0.35 * math.log(orders + 1.0)))
+    annual_frequency_estimate = orders * frequency_multiplier
 
     # Discount projected value by churn risk
-    churn_discount_factor = 1.0 - (customer.churn_risk_score * 0.6)
+    churn_discount_factor = max(0.20, 1.0 - (float(customer.churn_risk_score) * 0.60))
 
     projected_clv = average_order_value * annual_frequency_estimate * churn_discount_factor
-    return round(max(0.0, projected_clv), 2)
+    return round(max(float(customer.total_spend_amount), projected_clv), 2)

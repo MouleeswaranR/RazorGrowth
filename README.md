@@ -9,9 +9,11 @@
 |:---|:---|:---|
 | **System Architecture** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 8-layer stack, ERD models, Razorpay integration, asyncpg engine |
 | **Autonomous Workflow** | [docs/WORKFLOW.md](docs/WORKFLOW.md) | 7-stage closed loop, sequence diagrams, live payload examples |
-| **Multi-Agent System** | [docs/AGENTS.md](docs/AGENTS.md) | GrowthManager, Customer, Offer, Campaign, Experiment agents |
+| **Multi-Agent System** | [docs/AGENTS.md](docs/AGENTS.md) | Multi-provider LLM cascade, ReAct tool loop, specialized agents |
 | **Intelligence Layer** | [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md) | RFM segmentation, Churn decay model, CLV, Co-purchase affinity |
 | **Judging & Demo Runbook** | [docs/HACKATHON_RUNBOOK.md](docs/HACKATHON_RUNBOOK.md) | Step-by-step judge walkthrough, live webhook testing |
+| **File Inventory & Status** | [docs/FILE_INVENTORY_AND_STATUS.md](docs/FILE_INVENTORY_AND_STATUS.md) | Verified integration status across all backend and frontend files |
+| **Hackathon Project Spec** | [PROJECT.md](PROJECT.md) | Razorpay Hackathon Track 1 core requirements & criteria |
 
 ---
 
@@ -283,15 +285,20 @@ RAZORPAY_WEBHOOK_SECRET=YourWebhookSecretHere
 OPENROUTER_API_KEY=sk-or-v1-YourOpenRouterKeyHere
 ```
 
-5. Start the FastAPI development server:
+5. Start the FastAPI backend server:
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
+- API & Interactive Swagger Docs: `http://localhost:8000/docs`
 
-6. Open the Dashboard in your browser:
+6. In a separate terminal, start the Next.js Frontend Dashboard:
+```bash
+cd client
+npm install
+npm run dev
 ```
-http://localhost:8000
-```
+- Primary Dashboard: `http://localhost:3000`
+- Multi-Agent Live Execution Trace: `http://localhost:3000/trace`
 
 ---
 
@@ -299,14 +306,22 @@ http://localhost:8000
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/v1/simulator/generate` | Generates synthetic merchant dataset (500 customers, 2000 orders) |
-| `GET` | `/api/v1/simulator/local-snapshot` | Retrieves stored session JSON snapshot |
+| `POST` | `/api/v1/simulator/generate` | Generates synthetic merchant dataset (50 customers, 150 orders) |
+| `GET` | `/api/v1/simulator/local-snapshot` | Retrieves stored session JSON snapshot & active merchant telemetry |
 | `POST` | `/api/v1/growth/scan/{merchant_id}` | Runs multi-agent intelligence scan and returns ranked opportunities |
+| `GET` | `/api/v1/growth/scan-live/{merchant_id}` | Real-time Server-Sent Events (SSE) streaming of multi-agent pipeline progress |
+| `POST` | `/api/v1/growth/agentic-scan/{merchant_id}` | Bounded autonomous ReAct loop with multi-tool calling & vector memory citations |
+| `GET` | `/api/v1/growth/agentic-scan-live/{merchant_id}` | Real-time SSE streaming of bounded ReAct tool iterations |
+| `GET` | `/api/v1/growth/latest-trace` | Retrieves ordered execution trace & decision record on disk |
+| `GET` | `/api/v1/growth/sessions` | Lists all historical session traces with lift outcomes |
+| `POST` | `/api/v1/growth/cross-reference` | Cross-session semantic memory search & comparative RAG analysis |
+| `POST` | `/api/v1/growth/chat` | Conversational strategist grounded in episodic trace tools |
 | `POST` | `/api/v1/campaigns/launch/{opp_id}` | Evaluates Permission Gate and creates Razorpay Test Mode orders |
 | `POST` | `/api/v1/webhooks/razorpay` | Ingests and verifies live HMAC-signed Razorpay webhooks |
 | `POST` | `/api/v1/experiments/webhook-payment` | Triggers test webhook payment capture and recalculates lift in PostgreSQL |
 | `GET` | `/api/v1/experiments/results/{campaign_id}` | Reads real measured experiment lift metrics from database |
-| `POST` | `/api/v1/growth/chat` | Interactive merchant assistant with micro-tool trace retrieval |
+| `GET` | `/api/v1/sessions` | Lists all merchant conversational session threads |
+| `POST` | `/api/v1/sessions/conversations` | Persists conversation turns and vectorizes memories into ChromaDB |
 
 ---
 
@@ -317,4 +332,4 @@ Run the full automated test suite:
 python -m pytest tests/ -v
 ```
 
-All 28 test cases across unit, intelligence, agent, permission gate, and end-to-end integration tiers execute deterministically with 100% pass rate.
+All 29 test cases across unit, intelligence, multi-provider LLM, agentic loop, vector RAG memory, permission gates, and end-to-end integration tiers execute deterministically with 100% pass rate.

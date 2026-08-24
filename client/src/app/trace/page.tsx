@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Sparkles,
@@ -23,9 +23,14 @@ import {
   AlertCircle,
   Copy,
   Check,
+  Search,
+  Sliders,
+  Cpu,
+  Mail,
+  Zap,
 } from "lucide-react";
 import { Header } from "@/components/Header";
-import { getLatestTrace, listSessions } from "@/services/api";
+import { getLatestTrace, listSessions, getLocalSnapshot, generateSimulation, crossReferenceSessions } from "@/services/api";
 import { SessionSummary } from "@/types";
 
 interface LiveStepEvent {
@@ -38,7 +43,7 @@ interface LiveStepEvent {
 }
 
 export default function MultiAgentTracePage() {
-  const [sessionId, setSessionId] = useState<string>("");
+  const [sessionId, setSessionId] = useState<string>("sess_default");
   const [merchantId, setMerchantId] = useState<string>("merch_demo");
   const [merchantName, setMerchantName] = useState<string>("StyleKart");
   const [traceData, setTraceData] = useState<any>(null);
@@ -46,23 +51,64 @@ export default function MultiAgentTracePage() {
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [streamingMode, setStreamingMode] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [activeStepTab, setActiveStepTab] = useState<string>("all");
+  const [activeViewTab, setActiveViewTab] = useState<"all" | "agentic" | "rag">("all");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Initialize session
+  // RAG Interactive Search Lab State
+  const [ragQuery, setRagQuery] = useState<string>("churn prevention discount");
+  const [ragResults, setRagResults] = useState<any[]>([]);
+  const [isSearchingRag, setIsSearchingRag] = useState<boolean>(false);
+
+  // Initialize session and active merchant telemetry
   useEffect(() => {
-    const defaultSess = `sess_${Date.now().toString(36)}`;
-    setSessionId(defaultSess);
-    loadTrace(defaultSess);
+    const initTrace = async () => {
+      let activeMerchId = "merch_demo";
+      let activeMerchName = "StyleKart";
+      try {
+        const snap = await getLocalSnapshot();
+        if (snap?.data?.merchant_id && (snap.data.customers_created > 0 || (snap.data.sample_customers && snap.data.sample_customers.length > 0))) {
+          activeMerchId = snap.data.merchant_id;
+          activeMerchName = snap.data.merchant_name || "StyleKart";
+        } else {
+          const gen = await generateSimulation("StyleKart", 50, 150);
+          if (gen?.data?.merchant_id) {
+            activeMerchId = gen.data.merchant_id;
+            activeMerchName = gen.data.merchant_name || "StyleKart";
+          }
+        }
+      } catch (e) {
+        console.warn("Snapshot auto-seed check:", e);
+      }
+      setMerchantId(activeMerchId);
+      setMerchantName(activeMerchName);
+
+      try {
+        const sessList = await listSessions();
+        if (sessList?.sessions && sessList.sessions.length > 0) {
+          const latestSess = sessList.sessions[0].session_id;
+          setSessionId(latestSess);
+          loadTrace(latestSess);
+          return;
+        }
+      } catch {}
+
+      const defaultSess = `sess_${Date.now().toString(36)}`;
+      setSessionId(defaultSess);
+      loadTrace(defaultSess);
+    };
+
+    initTrace();
   }, []);
 
   const loadTrace = async (sid: string) => {
     setIsLoading(true);
     try {
       const res = await getLatestTrace(sid);
-      if (res && (res.data || res.steps)) {
-        setTraceData(res.data || res);
-        if (res.merchant_id) setMerchantId(res.merchant_id);
+      if (res && res.data) {
+        setTraceData(res.data);
+        if (res.data.merchant_id) setMerchantId(res.data.merchant_id);
+      } else if (res && res.steps && Object.keys(res.steps).length > 0) {
+        setTraceData(res);
       } else {
         setTraceData(null);
       }
@@ -93,24 +139,35 @@ export default function MultiAgentTracePage() {
       if (event.data === "[DONE]") {
         eventSource.close();
         setIsStreaming(false);
-        // Refresh full trace from disk
         loadTrace(activeSess);
         return;
       }
 
       try {
         const parsed = JSON.parse(event.data);
-        setLiveEvents((prev) => [
-          ...prev,
-          {
-            step: parsed.step || "step_event",
-            step_number: parsed.step_number || prev.length + 1,
-            status: parsed.status || "completed",
-            summary: parsed.summary || "",
-            data: parsed.data,
-            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-          },
-        ]);
+        const newEvt: LiveStepEvent = {
+          step: parsed.step || "step_event",
+          step_number: parsed.step_number || 1,
+          status: parsed.status || "completed",
+          summary: parsed.summary || "",
+          data: parsed.data,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        };
+
+        setLiveEvents((prev) => [...prev, newEvt]);
+
+        if (parsed.step === "final_plan_synthesized" || parsed.step === "7_growth_plan_finalized") {
+          setTraceData((prev: any) => ({
+            ...prev,
+            merchant_id: merchantId,
+            steps: {
+              ...(prev?.steps || {}),
+              ...(mode === "agentic"
+                ? { "2_agentic_decision_loop": { data: parsed.data } }
+                : { "2_opportunity_scan_and_ai_reasoning": { data: parsed.data } }),
+            },
+          }));
+        }
       } catch (e) {
         console.error("Error parsing SSE event:", e);
       }
@@ -121,6 +178,24 @@ export default function MultiAgentTracePage() {
       setIsStreaming(false);
       loadTrace(activeSess);
     };
+  };
+
+  const handleSearchRag = async () => {
+    if (!ragQuery.trim()) return;
+    setIsSearchingRag(true);
+    try {
+      const res = await crossReferenceSessions(sessionId, undefined, ragQuery);
+      if (res && res.vector_memories) {
+        setRagResults(res.vector_memories);
+      } else {
+        setRagResults([]);
+      }
+    } catch (e) {
+      console.error("RAG search failed:", e);
+      setRagResults([]);
+    } finally {
+      setIsSearchingRag(false);
+    }
   };
 
   const handleCopy = (key: string, content: string) => {
@@ -136,7 +211,7 @@ export default function MultiAgentTracePage() {
   const step3 = steps["3_campaign_launch_and_dispatch"]?.data;
   const step4 = steps["4_experiment_ab_lift_measurement"]?.data;
 
-  // Extract memory citations
+  // Extract items
   const memoryCitations = step2Agentic?.memory_citations || [];
   const agenticStepsTaken = step2Agentic?.steps_taken || [];
   const opportunities = step2Det?.opportunities || [];
@@ -172,14 +247,14 @@ export default function MultiAgentTracePage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-serif text-lg font-bold text-[var(--text-primary)]">
-                  Multi-Agent Live Execution Trace
+                  Multi-Agent Live Execution Trace & RAG Explorer
                 </h1>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--accent-terracotta)] text-white">
-                  INSPECTABLE RAG
+                  LIVE INSPECTOR
                 </span>
               </div>
               <p className="text-xs text-[var(--text-muted)] font-mono">
-                Active Trace Context: <strong className="text-[var(--accent-terracotta)]">{sessionId}</strong>
+                Inspecting Active Session Trace: <strong className="text-[var(--accent-terracotta)]">{sessionId}</strong>
               </p>
             </div>
           </div>
@@ -192,7 +267,7 @@ export default function MultiAgentTracePage() {
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[var(--accent-terracotta)] hover:bg-[var(--accent-terracotta-hover)] text-white shadow-xs transition-all cursor-pointer disabled:opacity-50"
             >
               <Sparkles className={`w-3.5 h-3.5 ${isStreaming && streamingMode === "agentic" ? "animate-spin" : ""}`} />
-              <span>{isStreaming && streamingMode === "agentic" ? "Streaming Agentic Loop..." : "Live Agentic Scan (SSE)"}</span>
+              <span>{isStreaming && streamingMode === "agentic" ? "Streaming ReAct Loop..." : "Live Agentic Scan (SSE)"}</span>
             </button>
 
             <button
@@ -206,24 +281,69 @@ export default function MultiAgentTracePage() {
           </div>
         </div>
 
-        {/* Live SSE Streaming Banner (When active) */}
-        {isStreaming && (
+        {/* View Switcher Tabs */}
+        <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-2 overflow-x-auto font-sans text-xs">
+          <button
+            onClick={() => setActiveViewTab("all")}
+            className={`px-3.5 py-1.5 rounded-xl font-semibold transition-all cursor-pointer ${
+              activeViewTab === "all"
+                ? "bg-[var(--accent-terracotta)] text-white shadow-xs"
+                : "bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+            }`}
+          >
+            📋 All Trace Overview
+          </button>
+          <button
+            onClick={() => setActiveViewTab("agentic")}
+            className={`px-3.5 py-1.5 rounded-xl font-semibold transition-all cursor-pointer ${
+              activeViewTab === "agentic"
+                ? "bg-[var(--accent-terracotta)] text-white shadow-xs"
+                : "bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+            }`}
+          >
+            ⚡ Autonomous ReAct Loop ({agenticStepsTaken.length} Tools)
+          </button>
+          <button
+            onClick={() => setActiveViewTab("rag")}
+            className={`px-3.5 py-1.5 rounded-xl font-semibold transition-all cursor-pointer ${
+              activeViewTab === "rag"
+                ? "bg-[var(--accent-terracotta)] text-white shadow-xs"
+                : "bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+            }`}
+          >
+            🧠 RAG Vector Memory Lab (ChromaDB)
+          </button>
+        </div>
+
+        {/* Live SSE Streaming Banner (Persistent during & after stream) */}
+        {(isStreaming || liveEvents.length > 0) && (
           <div className="p-4 rounded-2xl bg-[var(--accent-terracotta-subtle)] border border-[var(--accent-terracotta-border)] shadow-xs animate-in fade-in space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent-terracotta)] animate-ping" />
-                <span className="text-xs font-bold text-[var(--accent-terracotta)]">
-                  Live Multi-Agent Stream Active: Emitting Real-Time Agent Decision Events
-                </span>
+                {isStreaming ? (
+                  <>
+                    <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent-terracotta)] animate-ping" />
+                    <span className="text-xs font-bold text-[var(--accent-terracotta)]">
+                      Live Multi-Agent Stream Active: Emitting Real-Time Agent Decision Events
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-[var(--accent-emerald)]" />
+                    <span className="text-xs font-bold text-[var(--text-primary)]">
+                      Live Multi-Agent Execution Completed ({liveEvents.length} Step Events Recorded)
+                    </span>
+                  </>
+                )}
               </div>
               <span className="text-[11px] font-mono text-[var(--text-muted)]">
-                {liveEvents.length} events received
+                {liveEvents.length} events logged
               </span>
             </div>
 
-            <div className="max-h-36 overflow-y-auto space-y-1 pr-1 font-mono text-[11px]">
+            <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 font-mono text-[11px]">
               {liveEvents.map((evt, i) => (
-                <div key={i} className="flex items-center justify-between p-1.5 rounded-lg bg-[var(--bg-card)]/80 text-[var(--text-secondary)] border border-[var(--border-subtle)]">
+                <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-[var(--bg-card)]/90 text-[var(--text-secondary)] border border-[var(--border-subtle)]">
                   <div className="flex items-center gap-2 truncate">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-emerald)] shrink-0" />
                     <span className="font-bold text-[var(--text-primary)]">{evt.step}</span>
@@ -236,52 +356,24 @@ export default function MultiAgentTracePage() {
           </div>
         )}
 
-        {/* Empty State when no trace exists */}
-        {!traceData && !isStreaming && (
-          <div className="p-12 text-center rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-xs space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-[var(--accent-terracotta-subtle)] text-[var(--accent-terracotta)] flex items-center justify-center mx-auto">
-              <Layers className="w-6 h-6" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="font-serif text-base font-bold text-[var(--text-primary)]">
-                No Execution Trace Found for {sessionId}
-              </h3>
-              <p className="text-xs text-[var(--text-muted)] max-w-md mx-auto">
-                Traces are written to disk as agents execute. Click <strong>Live Agentic Scan (SSE)</strong> above or select a historical session from the top dropdown to view its full decision timeline!
-              </p>
-            </div>
-            <button
-              onClick={() => handleStartLiveStream("agentic")}
-              className="px-4 py-2 rounded-xl text-xs font-semibold bg-[var(--accent-terracotta)] hover:bg-[var(--accent-terracotta-hover)] text-white shadow-xs transition-all cursor-pointer inline-flex items-center gap-1.5"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Launch Live Agentic Scan Now</span>
-            </button>
-          </div>
-        )}
-
-        {/* Full Ordered Decision Record Timeline */}
-        {traceData && (
+        {/* TAB 1: ALL TRACE OVERVIEW */}
+        {activeViewTab === "all" && (
           <div className="space-y-6">
-            {/* 1. RAG Vector Memory Recall Card (Crucial for Verifying RAG) */}
+            {/* Memory Citations Box */}
             {memoryCitations.length > 0 && (
               <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-emerald-500/30 shadow-xs space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Database className="w-4 h-4 text-[var(--accent-emerald)]" />
                     <h2 className="font-serif text-sm font-bold text-[var(--text-primary)]">
-                      RAG Vector Memory Recall Citations (ChromaDB)
+                      RAG Vector Memory Citations (ChromaDB + FastEmbed)
                     </h2>
                   </div>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-[var(--accent-emerald)]">
-                    {memoryCitations.length} Past Outcomes Grounded
+                    {memoryCitations.length} Historical Benchmarks Recalled
                   </span>
                 </div>
-                <p className="text-xs text-[var(--text-muted)]">
-                  These historical campaign benchmarks were dynamically embedded via FastEmbed 384-dim dense vectors and recalled before making decisions.
-                </p>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {memoryCitations.map((mem: any, idx: number) => (
                     <div key={idx} className="p-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-xs space-y-1.5">
                       <div className="flex items-center justify-between">
@@ -290,7 +382,7 @@ export default function MultiAgentTracePage() {
                         </span>
                         {mem.distance !== undefined && (
                           <span className="text-[10px] text-[var(--text-muted)] font-mono">
-                            Distance: {mem.distance.toFixed(3)}
+                            Cosine Dist: {mem.distance.toFixed(3)}
                           </span>
                         )}
                       </div>
@@ -301,60 +393,7 @@ export default function MultiAgentTracePage() {
               </div>
             )}
 
-            {/* 2. ReAct Step-by-Step Tool Invocations (If Agentic Scan was run) */}
-            {agenticStepsTaken.length > 0 && (
-              <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-xs space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Wrench className="w-4 h-4 text-[var(--accent-terracotta)]" />
-                    <h2 className="font-serif text-sm font-bold text-[var(--text-primary)]">
-                      Autonomous ReAct Tool Invocations ({agenticStepsTaken.length} Steps)
-                    </h2>
-                  </div>
-                  <span className="text-xs font-mono text-[var(--text-muted)]">
-                    Bounded Decision Loop
-                  </span>
-                </div>
-
-                <div className="space-y-3">
-                  {agenticStepsTaken.map((step: any, idx: number) => (
-                    <div key={idx} className="p-3.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-xs space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="w-5 h-5 rounded-full bg-[var(--accent-terracotta)] text-white text-[10px] font-bold flex items-center justify-center">
-                            {step.step_number || idx + 1}
-                          </span>
-                          <span className="font-mono font-bold text-[var(--text-primary)]">
-                            {step.tool_name}
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-[var(--text-secondary)] font-medium">
-                          {step.step_summary}
-                        </span>
-                      </div>
-
-                      {/* Tool Arguments & Result Preview */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px] font-mono pt-1">
-                        <div className="p-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)]">
-                          <div className="text-[var(--text-muted)] font-semibold mb-1">Arguments:</div>
-                          <div className="text-[var(--text-secondary)] truncate">
-                            {JSON.stringify(step.arguments)}
-                          </div>
-                        </div>
-                        <div className="p-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)]">
-                          <div className="text-[var(--text-muted)] font-semibold mb-1">Tool Output Result:</div>
-                          <div className="text-[var(--text-secondary)] truncate">
-                            {JSON.stringify(step.result)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 3. Targeted Audience Cohort (Names, Emails, Segment) */}
+            {/* Targeted Audience Cohort Grid */}
             {targetCustomers.length > 0 && (
               <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-xs space-y-3">
                 <div className="flex items-center justify-between">
@@ -384,7 +423,7 @@ export default function MultiAgentTracePage() {
               </div>
             )}
 
-            {/* 4. A/B Experiment & Webhook Conversions */}
+            {/* A/B Experiment & Webhook Conversions */}
             {step4 && (
               <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--accent-terracotta-border)] shadow-xs space-y-3">
                 <div className="flex items-center justify-between">
@@ -426,7 +465,6 @@ export default function MultiAgentTracePage() {
                   </div>
                 </div>
 
-                {/* Converted Customers List */}
                 {step4.converted_customers && step4.converted_customers.length > 0 && (
                   <div className="p-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-xs space-y-1.5">
                     <div className="font-semibold text-[var(--text-primary)] text-[11px]">
@@ -440,6 +478,151 @@ export default function MultiAgentTracePage() {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: AGENTIC REACT LOOP */}
+        {activeViewTab === "agentic" && (
+          <div className="space-y-4">
+            <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-[var(--accent-terracotta)]" />
+                  <h2 className="font-serif text-sm font-bold text-[var(--text-primary)]">
+                    Bounded ReAct Multi-Tool Execution Sequence
+                  </h2>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--accent-terracotta-subtle)] text-[var(--accent-terracotta)] border border-[var(--accent-terracotta-border)]">
+                  Max Steps: 6
+                </span>
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">
+                The LLM drives autonomous diagnostic reasoning by invoking domain tools sequentially, inspecting the results, and deciding the next action.
+              </p>
+            </div>
+
+            {agenticStepsTaken.length === 0 ? (
+              <div className="p-8 text-center rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs text-[var(--text-muted)]">
+                No tool iterations recorded yet for this session. Click <strong>Live Agentic Scan (SSE)</strong> above to stream the ReAct loop in real-time!
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {agenticStepsTaken.map((step: any, idx: number) => (
+                  <div key={idx} className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-2xs space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-[var(--accent-terracotta)] text-white text-xs font-bold flex items-center justify-center">
+                          {step.step_number || idx + 1}
+                        </span>
+                        <span className="font-mono font-bold text-xs text-[var(--text-primary)]">
+                          {step.tool_name}
+                        </span>
+                      </div>
+                      <span className="text-xs text-[var(--text-secondary)] font-medium">
+                        {step.step_summary}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] font-mono">
+                      <div className="p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
+                        <div className="text-[var(--text-muted)] font-semibold mb-1">Input Arguments:</div>
+                        <pre className="text-[var(--text-secondary)] whitespace-pre-wrap overflow-x-auto text-[10px]">
+                          {JSON.stringify(step.arguments, null, 2)}
+                        </pre>
+                      </div>
+                      <div className="p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
+                        <div className="text-[var(--text-muted)] font-semibold mb-1">Output Result:</div>
+                        <pre className="text-[var(--text-secondary)] whitespace-pre-wrap overflow-x-auto text-[10px]">
+                          {JSON.stringify(step.result, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: RAG VECTOR MEMORY LAB */}
+        {activeViewTab === "rag" && (
+          <div className="space-y-4">
+            <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-[var(--accent-emerald)]" />
+                  <h2 className="font-serif text-sm font-bold text-[var(--text-primary)]">
+                    ChromaDB Vector Memory & Semantic Recall Lab
+                  </h2>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-[var(--accent-emerald)]">
+                  FastEmbed 384-Dim Dense Embeddings
+                </span>
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">
+                Test live semantic similarity search against past campaign outcome benchmarks stored in ChromaDB for merchant <strong className="text-[var(--text-primary)]">{merchantId}</strong>.
+              </p>
+
+              {/* Interactive Search Bar */}
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+                  <input
+                    type="text"
+                    value={ragQuery}
+                    onChange={(e) => setRagQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSearchRag()}
+                    placeholder="Enter query to test vector semantic recall (e.g. VIP dormant churn recovery)"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl text-xs bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-terracotta)] font-mono"
+                  />
+                </div>
+                <button
+                  onClick={handleSearchRag}
+                  disabled={isSearchingRag}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-[var(--accent-emerald)] hover:bg-emerald-600 text-white shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isSearchingRag ? "Searching..." : "Vector Search"}
+                </button>
+              </div>
+            </div>
+
+            {/* RAG Results */}
+            {ragResults.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {ragResults.map((res: any, i: number) => (
+                  <div key={i} className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[var(--accent-emerald)] font-mono">
+                        Result #{i + 1} ({res.memory_type || "campaign_memory"})
+                      </span>
+                      {res.distance !== undefined && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/10 text-[var(--accent-emerald)]">
+                          Distance: {res.distance.toFixed(4)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[var(--text-primary)] leading-relaxed">{res.summary || res.summary_text}</p>
+                    {res.metadata && (
+                      <div className="p-2.5 rounded-lg bg-[var(--bg-secondary)] text-[11px] font-mono border border-[var(--border-subtle)] space-y-1.5 overflow-hidden">
+                        <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider">
+                          Indexed Grounding Metadata:
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                          {Object.entries(res.metadata).map(([k, v]: [string, any]) => (
+                            <div key={k} className="p-1 rounded bg-[var(--bg-card)] border border-[var(--border-subtle)] truncate">
+                              <span className="text-[var(--text-muted)]">{k}: </span>
+                              <span className="text-[var(--text-primary)] font-semibold truncate">
+                                {typeof v === "number" ? v.toLocaleString() : String(v)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>

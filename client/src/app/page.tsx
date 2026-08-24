@@ -38,6 +38,8 @@ import {
   getExperimentResults,
   listCustomers,
   getLatestTrace,
+  listSessions,
+  getLocalSnapshot,
 } from "@/services/api";
 
 import {
@@ -100,12 +102,44 @@ export default function DashboardPage() {
     setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
   };
 
-  // Initialize Session
+  // Initialize Dashboard with active/latest session
   useEffect(() => {
-    const newSessionId = `sess_${Date.now().toString(36)}`;
-    setSessionId(newSessionId);
-    // Automatically load local simulation or initialize
-    handleLoadLocalSimulation(newSessionId);
+    const initDashboard = async () => {
+      try {
+        const sessList = await listSessions();
+        if (sessList?.sessions && sessList.sessions.length > 0) {
+          const latest = sessList.sessions[0].session_id;
+          await handleSelectHistoricalSession(latest);
+          return;
+        }
+      } catch (e) {
+        console.warn("Could not fetch sessions list on mount:", e);
+      }
+
+      // If no sessions yet, load local dataset without re-generating
+      try {
+        const snap = await getLocalSnapshot();
+        if (snap?.data?.merchant_id) {
+          setMerchantId(snap.data.merchant_id);
+          setMerchantName(snap.data.merchant_name || "StyleKart");
+          setTotalOrders(snap.data.orders_created || 2000);
+          setCurrentStage(2);
+          const custList = await listCustomers(snap.data.merchant_id, 100);
+          setCustomers(custList);
+          const activeSess = `sess_${Date.now().toString(36)}`;
+          setSessionId(activeSess);
+          await handleScanOpportunities(snap.data.merchant_id, activeSess);
+          return;
+        }
+      } catch (e) {
+        console.warn("Local snapshot check on mount:", e);
+      }
+
+      const defaultSess = `sess_${Date.now().toString(36)}`;
+      setSessionId(defaultSess);
+    };
+
+    initDashboard();
   }, []);
 
   // Handler: Generate New Simulation
@@ -498,6 +532,7 @@ export default function DashboardPage() {
         {/* 6-Stage Autonomous Loop Progress Pipeline */}
         <PipelineVisualizer
           currentStage={currentStage}
+          isLoopCompleted={completedPaymentOppIds.size > 0}
           onSelectStage={(st) => {
             if (st === 2) setActiveTab("customers");
             else if (st === 5 || st === 6) setActiveTab("growth");

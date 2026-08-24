@@ -1,18 +1,23 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from app.models.customer import CustomerModel
 from app.models.order import OrderModel
 from app.models.payment import PaymentModel
+from app.intelligence.distribution_thresholds import compute_merchant_distribution_thresholds
 from app.intelligence.customer_segmentation import classify_customer_segment, compute_rfm_composite_score
 from app.intelligence.churn_predictor import calculate_churn_risk_score, calculate_churn_risk_with_orders
 from app.intelligence.clv_estimator import estimate_customer_lifetime_value
 from app.intelligence.product_recommender import build_category_copurchase_matrix, find_cross_sell_candidates
 from app.intelligence.payment_method_analyzer import analyze_payment_method_performance, find_underperforming_payment_methods
-from app.intelligence.opportunity_detector import detect_dormant_vip_opportunity, detect_payment_optimization_opportunity
+from app.intelligence.opportunity_detector import (
+    detect_dormant_vip_opportunity,
+    detect_churn_intervention_opportunity,
+    detect_aov_basket_builder_opportunity,
+)
 
 
 def test_segmentation_edge_cases():
     """Tests segmentation for zero orders, new users, and dormant VIPs."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Zero orders customer
     c_zero = CustomerModel(id="c0", merchant_id="m1", name="Zero", email="z@e.com", total_orders_count=0, total_spend_amount=0.0)
@@ -37,17 +42,52 @@ def test_segmentation_edge_cases():
     assert 0.0 <= rfm <= 1.0
 
 
+def test_distribution_aware_adaptation():
+    """Tests that quantile thresholds correctly adapt between low-AOV and high-AOV stores."""
+    now = datetime.now(timezone.utc)
+
+    # Low-AOV merchant (e.g. ₹150 average item store)
+    low_aov_custs = [
+        CustomerModel(
+            id=f"low_{i}", merchant_id="m_low", name=f"Low {i}", email=f"l{i}@e.com",
+            total_orders_count=i + 1, total_spend_amount=float((i + 1) * 150),
+            last_purchase_timestamp=now - timedelta(days=i * 5),
+        )
+        for i in range(20)
+    ]
+    low_thresh = compute_merchant_distribution_thresholds(low_aov_custs)
+    assert low_thresh.vip_spend_p90 < 3500.0  # Adapts down to low store spend
+
+    # High-AOV luxury merchant (e.g. ₹20,000 average item store)
+    high_aov_custs = [
+        CustomerModel(
+            id=f"high_{i}", merchant_id="m_high", name=f"High {i}", email=f"h{i}@e.com",
+            total_orders_count=i + 1, total_spend_amount=float((i + 1) * 20000),
+            last_purchase_timestamp=now - timedelta(days=i * 5),
+        )
+        for i in range(20)
+    ]
+    high_thresh = compute_merchant_distribution_thresholds(high_aov_custs)
+    assert high_thresh.vip_spend_p90 > 250000.0  # Adapts up to luxury store spend
+
+    # Both classify their top 10% customers appropriately relative to their own distribution
+    top_low = low_aov_custs[-1]
+    top_high = high_aov_custs[-1]
+    assert classify_customer_segment(top_low, low_thresh) in ("VIP Active", "VIP Dormant")
+    assert classify_customer_segment(top_high, high_thresh) in ("VIP Active", "VIP Dormant")
+
+
 def test_churn_predictor_edge_cases():
-    """Tests churn risk scoring with missing timestamps and interval decay."""
-    now = datetime.utcnow()
+    """Tests churn risk scoring with missing timestamps and continuous decay."""
+    now = datetime.now(timezone.utc)
 
     # No timestamp -> highest risk (0.90)
     c_none = CustomerModel(id="c0", merchant_id="m1", name="None", email="n@e.com", last_purchase_timestamp=None)
     assert calculate_churn_risk_score(c_none) == 0.90
 
-    # Recent customer -> low risk (0.05)
+    # Recent customer -> low risk (< 0.10)
     c_recent = CustomerModel(id="c1", merchant_id="m1", name="Recent", email="r@e.com", last_purchase_timestamp=now - timedelta(days=2))
-    assert calculate_churn_risk_score(c_recent) == 0.05
+    assert calculate_churn_risk_score(c_recent) < 0.10
 
     # With empty orders list
     risk = calculate_churn_risk_with_orders(c_recent, [])
@@ -55,7 +95,7 @@ def test_churn_predictor_edge_cases():
 
 
 def test_clv_estimator_edge_cases():
-    """Tests CLV estimation with zero orders and high churn discount."""
+    """Tests continuous CLV estimation with zero orders and high churn discount."""
     # Zero orders
     c_zero = CustomerModel(id="c0", merchant_id="m1", name="Zero", email="z@e.com", total_orders_count=0, total_spend_amount=0.0)
     assert estimate_customer_lifetime_value(c_zero) == 1500.0
@@ -66,7 +106,7 @@ def test_clv_estimator_edge_cases():
         total_orders_count=5, total_spend_amount=10000.0, churn_risk_score=0.90,
     )
     clv = estimate_customer_lifetime_value(c_churn)
-    assert clv > 0
+    assert clv >= 10000.0
 
 
 def test_copurchase_matrix_and_cross_sell():
@@ -100,13 +140,6 @@ def test_payment_method_analyzer_edge_cases():
     assert "upi" in stats
     assert stats["upi"]["success_rate"] == 1.0
     assert stats["card"]["success_rate"] == 0.0
-
-
-from app.intelligence.opportunity_detector import (
-    detect_dormant_vip_opportunity,
-    detect_churn_intervention_opportunity,
-    detect_aov_basket_builder_opportunity,
-)
 
 
 def test_opportunity_detector_edge_cases():

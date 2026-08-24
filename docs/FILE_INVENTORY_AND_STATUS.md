@@ -114,25 +114,39 @@ This document provides a line-by-line audit of all files in the codebase. It det
 
 ---
 
-## 9. API Gateway & User Interface (`app/api/` & `app/static/`)
+## 9. API Gateway (`app/api/`)
 
 | File Path | Status | Production Specification | Current Implementation |
 |:---|:---|:---|:---|
 | [`app/api/routes_simulator.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_simulator.py) | **`[INTEGRATED]`** | Triggers synthetic merchant dataset creation and serves local JSON snapshots. | `POST /api/v1/simulator/generate`, `GET /api/v1/simulator/local-snapshot`, `POST /api/v1/simulator/load-from-local`. |
 | [`app/api/routes_customers.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_customers.py) | **`[INTEGRATED]`** | Queries paginated Customer 360 records and profiles. | `GET /api/v1/customers` and `GET /api/v1/customers/{id}`. |
-| [`app/api/routes_growth.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_growth.py) | **`[INTEGRATED]`** | Scans merchant data and handles interactive AI chat with trace tool retrieval. | `POST /api/v1/growth/scan/{merchant_id}`, `POST /api/v1/growth/chat`, `GET /api/v1/growth/latest-trace`. |
+| [`app/api/routes_growth.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_growth.py) | **`[INTEGRATED]`** | Multi-agent growth scans, bounded agentic ReAct loop, live SSE step streaming, trace retrieval, and chat. | `POST /scan`, `GET /scan-live`, `POST /agentic-scan`, `GET /agentic-scan-live`, `GET /latest-trace`, `GET /sessions`, `POST /cross-reference`, `POST /chat`. |
 | [`app/api/routes_campaigns.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_campaigns.py) | **`[INTEGRATED]`** | Evaluates Permission Gate and launches autonomous campaigns with Razorpay Test Orders. | `POST /api/v1/campaigns/launch/{opportunity_id}`. |
 | [`app/api/routes_experiments.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_experiments.py) | **`[INTEGRATED]`** | Reads PostgreSQL A/B metrics and provides test payment webhook trigger. | `GET /api/v1/experiments/results/{campaign_id}`, `POST /api/v1/experiments/webhook-payment`. |
+| [`app/api/routes_sessions.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_sessions.py) | **`[INTEGRATED]`** | Manages merchant conversation threads and vectorizes memories into ChromaDB. | `GET /api/v1/sessions` and `POST /api/v1/sessions/conversations`. |
 | [`app/api/routes_webhooks.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/api/routes_webhooks.py) | **`[INTEGRATED]`** | Ingests and HMAC-verifies real Razorpay payment webhooks. | `POST /api/v1/webhooks/razorpay`, `GET /api/v1/webhooks/recent`, `POST /api/v1/webhooks/simulate-test-event`. |
-| [`app/main.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/main.py) | **`[INTEGRATED]`** | FastAPI application entry point, lifecycle manager, static file server. | Serves dashboard at `/` and API at `/api/v1`. |
-| [`app/static/index.html`](file:///c:/Users/ffmou/Desktop/razorpay/app/static/index.html) | **`[INTEGRATED]`** | Merchant growth dashboard with real-time metrics, opportunity cards, Permission Gate override UI, and A/B console. | Single-page dashboard styled with modern Razorpay fintech aesthetics and zero emojis. |
+| [`app/main.py`](file:///c:/Users/ffmou/Desktop/razorpay/app/main.py) | **`[INTEGRATED]`** | FastAPI application entry point, lifecycle manager, CORS middleware, and API router. | Serves API at `/api/v1` and Swagger docs at `/docs`. |
 
 ---
 
-## 10. Automated Test Suite (`tests/`)
+## 10. Frontend Application (`client/`)
+
+| File Path | Status | Production Specification | Current Implementation |
+|:---|:---|:---|:---|
+| [`client/src/app/page.tsx`](file:///c:/Users/ffmou/Desktop/razorpay/client/src/app/page.tsx) | **`[INTEGRATED]`** | Primary Merchant Growth Dashboard with real-time telemetry, opportunity pipeline, and A/B console. | Interactive Next.js 16 + React 19 dashboard with Warm Sand and Dark Obsidian themes. |
+| [`client/src/app/trace/page.tsx`](file:///c:/Users/ffmou/Desktop/razorpay/client/src/app/trace/page.tsx) | **`[INTEGRATED]`** | Dedicated Multi-Agent Live Execution Trace & Timeline viewer. | Real-time SSE streaming visualizer for ReAct tool invocations, RAG vector memory citations, and A/B results. |
+| [`client/src/components/ClaudeGrowthStrategist.tsx`](file:///c:/Users/ffmou/Desktop/razorpay/client/src/components/ClaudeGrowthStrategist.tsx) | **`[INTEGRATED]`** | Conversational growth advisor grounded in trace micro-tools with interactive tool dropdowns. | Renders model reasoning trace pills, interactive tool inspection drawers, and Markdown formatting. |
+| [`client/src/components/SessionSwitcher.tsx`](file:///c:/Users/ffmou/Desktop/razorpay/client/src/components/SessionSwitcher.tsx) | **`[INTEGRATED]`** | Top-header session history dropdown with 1-click switching and Cross-Reference RAG modal. | Queries past sessions, switches active session state, and opens cross-session semantic search modal. |
+| [`client/src/components/Header.tsx`](file:///c:/Users/ffmou/Desktop/razorpay/client/src/components/Header.tsx) | **`[INTEGRATED]`** | Top navigation bar with Razorpay sandbox status, theme toggle, session switcher, and demo launcher. | Cleanly aligned sticky header with direct link to Live Trace page. |
+
+---
+
+## 11. Automated Test Suite (`tests/`)
 
 | File Path | Status | Coverage |
 |:---|:---|:---|
+| [`tests/test_multi_provider_llm.py`](file:///c:/Users/ffmou/Desktop/razorpay/tests/test_multi_provider_llm.py) | **`[INTEGRATED]`** | Tests multi-provider LLM cascade, failover logic across NVIDIA NIM/OpenRouter/Groq/Mistral, and `<think>` reasoning extraction. |
+| [`tests/test_rag_and_agentic_loop.py`](file:///c:/Users/ffmou/Desktop/razorpay/tests/test_rag_and_agentic_loop.py) | **`[INTEGRATED]`** | Tests FastEmbed embeddings, ChromaDB vector memory persistence, tool execution, and bounded ReAct loops. |
 | [`tests/test_agents.py`](file:///c:/Users/ffmou/Desktop/razorpay/tests/test_agents.py) | **`[INTEGRATED]`** | Tests CustomerAgent filtering, OfferAgent tiers, CampaignAgent copy, and ExperimentAgent math. |
 | [`tests/test_intelligence.py`](file:///c:/Users/ffmou/Desktop/razorpay/tests/test_intelligence.py) | **`[INTEGRATED]`** | Tests RFM segmentation, Churn decay formula, CLV estimation, Co-purchase matrix, and Opportunity Detector. |
 | [`tests/test_permission_gates.py`](file:///c:/Users/ffmou/Desktop/razorpay/tests/test_permission_gates.py) | **`[INTEGRATED]`** | Tests dynamic threshold computation, discount limit violations, audience caps, and auto-approval. |
