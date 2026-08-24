@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: razorgrowth-postgres
+    environment:
+      POSTGRES_DB: razorgrowth
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - razorgrowth-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: razorgrowth-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Database Configuration
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/razorgrowth
+      
+      # Razorpay Test Mode Credentials (override via .env file)
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-rzp_test_your_key_id_here}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-your_key_secret_here}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-your_webhook_secret_here}
+      
+      # AI/LLM Configuration (override via .env file)
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-your_openrouter_api_key_here}
+      NVIDIA_NIM_API_KEY: ${NVIDIA_NIM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      
+      # Application Settings
+      APP_NAME: "RazorGrowth AI"
+      ENVIRONMENT: "development"
+      DEBUG: "True"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    networks:
+      - razorgrowth-network
+    restart: unless-stopped
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: razorgrowth-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - razorgrowth-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  razorgrowth-network:
+    driver: bridge

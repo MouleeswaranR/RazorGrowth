@@ -1,0 +1,66 @@
+# Environment and Credentials
+.env
+.env.local
+
+
+# Python Artifacts & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Data, Logs & Session Output
+output/
+data/latest_simulation.json
+data/vector_memory/
+*.log
+*.sqlite3
+
+# Node / Next.js
+client/.next/
+client/node_modules/
+client/out/
+
+# IDEs & System Files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Agent Internal State
+.agents/
