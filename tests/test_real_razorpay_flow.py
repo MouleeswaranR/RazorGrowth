@@ -80,10 +80,13 @@ async def test_recalculate_campaign_metrics_returns_sentinel_on_empty_assignment
     from app.models.opportunity import OpportunityModel
     from app.models.campaign import CampaignModel
     from app.services.live_experiment_service import live_experiment_service
+    import uuid
 
+    test_suffix = uuid.uuid4().hex[:8]
+    
     async for session in get_database_session():
         merchant = MerchantModel(
-            id="merch_empty_sentinel_test",
+            id=f"merch_sentinel_{test_suffix}",
             name="Sentinel Merchant",
             category="Apparel",
         )
@@ -91,7 +94,7 @@ async def test_recalculate_campaign_metrics_returns_sentinel_on_empty_assignment
         await session.flush()
 
         opportunity = OpportunityModel(
-            id="opp_empty_sentinel_test",
+            id=f"opp_sentinel_{test_suffix}",
             merchant_id=merchant.id,
             opportunity_type="customer_churn_prevention",
             title="Dormant VIP Recovery",
@@ -106,7 +109,7 @@ async def test_recalculate_campaign_metrics_returns_sentinel_on_empty_assignment
 
         # Create temporary campaign with no assignments
         campaign = CampaignModel(
-            id="cmp_empty_sentinel_test",
+            id=f"cmp_sentinel_{test_suffix}",
             opportunity_id=opportunity.id,
             name="Empty Sentinel Test Campaign",
             channel="email",
@@ -120,7 +123,7 @@ async def test_recalculate_campaign_metrics_returns_sentinel_on_empty_assignment
 
         metrics = await live_experiment_service.recalculate_campaign_metrics(
             session=session,
-            campaign_id="cmp_empty_sentinel_test",
+            campaign_id=campaign.id,
         )
 
         assert metrics["status_note"] == "no_conversions_recorded_yet"

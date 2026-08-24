@@ -163,13 +163,22 @@ async def test_agentic_orchestrator_bounded_execution():
 
     mock_session.execute.side_effect = mock_exec
 
-    result = await agentic_orchestrator.run_agentic_growth_scan(
-        session=mock_session,
-        merchant_id="merch_agentic_mock",
-    )
+    with patch("app.services.llm_service.llm_service.call_with_tools", side_effect=[
+        LLMToolResponse(stop_reason="tool_use", tool_call=ToolCall(name="get_merchant_context", arguments={})),
+        LLMToolResponse(stop_reason="tool_use", tool_call=ToolCall(name="detect_opportunities", arguments={})),
+        LLMToolResponse(stop_reason="tool_use", tool_call=ToolCall(name="recall_similar_past_campaigns", arguments={"query": "VIP recovery"})),
+        LLMToolResponse(stop_reason="tool_use", tool_call=ToolCall(name="select_audience", arguments={"opportunity_type": "customer_churn_prevention"})),
+        LLMToolResponse(stop_reason="tool_use", tool_call=ToolCall(name="recommend_offer", arguments={"segment": "VIP Dormant", "average_spend": 3500.0})),
+        LLMToolResponse(stop_reason="tool_use", tool_call=ToolCall(name="check_permission_gate", arguments={"discount_value": 20.0, "audience_count": 54, "target_segment": "VIP Dormant"})),
+        LLMToolResponse(stop_reason="final_answer", content="Synthesized autonomous multi-agent growth plan across all 6 diagnostic tools."),
+    ]):
+        result = await agentic_orchestrator.run_agentic_growth_scan(
+            session=mock_session,
+            merchant_id="merch_agentic_mock",
+        )
 
     assert result.merchant_id == "merch_agentic_mock"
-    assert len(result.steps_taken) <= 6
+    assert len(result.steps_taken) == 6
     assert result.status in ("completed", "max_steps_reached")
     assert len(result.plan_summary) > 10
 

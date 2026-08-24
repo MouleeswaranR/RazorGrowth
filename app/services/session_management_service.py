@@ -4,7 +4,6 @@ from datetime import datetime
 from sqlalchemy import select, update, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.session import Session
-from app.models.conversation import Conversation
 
 logger = logging.getLogger(__name__)
 
@@ -91,26 +90,6 @@ class SessionManagementService:
         return await SessionManagementService.get_session(session, session_id)
 
     @staticmethod
-    async def increment_session_metrics(
-        session: AsyncSession,
-        session_id: str,
-        opportunities_delta: int = 0,
-        campaigns_delta: int = 0,
-        gmv_delta: float = 0.0,
-    ) -> None:
-        """Increment session metrics atomically."""
-        db_session = await SessionManagementService.get_session(session, session_id)
-        if not db_session:
-            return
-        
-        db_session.total_opportunities_found += opportunities_delta
-        db_session.total_campaigns_launched += campaigns_delta
-        db_session.total_gmv_impact += gmv_delta
-        db_session.last_activity_at = datetime.utcnow()
-        
-        await session.commit()
-
-    @staticmethod
     async def archive_session(session: AsyncSession, session_id: str) -> None:
         """Archive a session."""
         await SessionManagementService.update_session(
@@ -126,32 +105,5 @@ class SessionManagementService:
             await session.delete(db_session)
             await session.commit()
             logger.info(f"Deleted session {session_id}")
-
-    @staticmethod
-    async def get_or_create_default_session(
-        session: AsyncSession,
-        merchant_id: str,
-    ) -> Session:
-        """Get the most recent active session or create a default one."""
-        # Try to get most recent active session
-        result = await session.execute(
-            select(Session)
-            .where(Session.merchant_id == merchant_id, Session.status == "active")
-            .order_by(desc(Session.last_activity_at))
-            .limit(1)
-        )
-        
-        existing_session = result.scalar_one_or_none()
-        if existing_session:
-            return existing_session
-        
-        # Create default session
-        return await SessionManagementService.create_session(
-            session,
-            merchant_id=merchant_id,
-            session_name="Default Session",
-            session_description="Automatically created default session",
-        )
-
 
 session_management_service = SessionManagementService()

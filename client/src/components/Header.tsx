@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { Sparkles, Moon, Sun, ShieldCheck, Play, Radio, Terminal, Activity, Layers } from "lucide-react";
+import { Sparkles, Moon, Sun, ShieldCheck, Play, Radio, Terminal, Activity } from "lucide-react";
 import { SessionSwitcher } from "@/components/SessionSwitcher";
 
 interface HeaderProps {
@@ -82,15 +82,7 @@ export const Header: React.FC<HeaderProps> = ({
             onSelectSession={onSelectSession || (() => {})}
           />
 
-          {/* Multi-Agent Trace Link */}
-          <Link
-            href="/trace"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--bg-secondary)] hover:bg-[var(--bg-card-hover)] text-[var(--text-primary)] border border-[var(--border-subtle)] shadow-2xs transition-all cursor-pointer"
-            title="Inspect ordered Multi-Agent execution trace & RAG citations"
-          >
-            <Layers className="w-3.5 h-3.5 text-[var(--accent-terracotta)]" />
-            <span className="hidden sm:inline">Live Trace</span>
-          </Link>
+
 
           {/* Quick 1-Click Demo Tour */}
           <button

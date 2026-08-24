@@ -16,9 +16,4 @@ class MessageSimulator:
         self._sent_messages.append(record)
         return record
 
-    def get_total_dispatched_count(self) -> int:
-        """Returns total count of simulated messages successfully sent."""
-        return len(self._sent_messages)
-
-
 message_simulator = MessageSimulator()

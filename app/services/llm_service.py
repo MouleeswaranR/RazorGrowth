@@ -19,7 +19,7 @@ from app.schemas.agent_outputs import (
     LLMToolResponse,
     ToolCall,
 )
-from app.services.llm_provider_service import llm_provider_service
+from app.services.llm_provider_service import llm_provider_service, MAX_TOKENS_BY_TASK
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +142,10 @@ class LLMService:
         tools_used = tool_result.get("tools_used") or [tool_result.get("tool", "trace_lookup")]
 
         prompt = build_chat_prompt(input_data.query, json.dumps(tool_result, indent=2), input_data.total_customers, input_data.total_revenue, input_data.dormant_vip_count)
-        messages = [{"role": "system", "content": SYSTEM_GROWTH_STRATEGIST}, {"role": "user", "content": prompt}]
+        messages = [
+            {"role": "system", "content": "You are RazorGrowth AI. Return ONLY a direct JSON object with keys 'reply' and 'suggested_follow_up_action'. Do NOT include any thinking process, preamble, or commentary."},
+            {"role": "user", "content": prompt},
+        ]
         res = await llm_provider_service.execute_chat_with_fallback(messages, task="chat")
         if res and res.get("content"):
             raw_content = res["content"]
@@ -172,6 +175,71 @@ class LLMService:
             tool_data=tool_result,
         )
 
+    async def stream_chat_with_merchant(self, input_data: LLMChatInput) -> AsyncGenerator[dict, None]:
+        """Streams a merchant chat answer token-by-token after resolving grounding micro-tools.
+
+        Emits a {"type": "tools"} event first so the UI can show which micro-tools grounded
+        the answer, then {"type": "token"|"reasoning"} deltas, then a terminal
+        {"type": "done"}. Falls back to the blocking path if no provider streams, so the
+        caller always receives a usable reply.
+        """
+        from app.services.trace_tool_service import trace_tool_service
+
+        session_id = input_data.session_id or input_data.merchant_id
+        tool_result = trace_tool_service.route_and_fetch_relevant_context(input_data.query, session_id)
+        tools_used = tool_result.get("tools_used") or [tool_result.get("tool", "trace_lookup")]
+
+        yield {"type": "tools", "tools_used": tools_used, "tool_data": tool_result}
+
+        prompt = build_chat_prompt(
+            input_data.query,
+            json.dumps(tool_result, indent=2),
+            input_data.total_customers,
+            input_data.total_revenue,
+            input_data.dormant_vip_count,
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_GROWTH_STRATEGIST},
+            {"role": "user", "content": prompt},
+        ]
+
+        collected: list[str] = []
+        provider_used: str | None = None
+        async for chunk in llm_provider_service.stream_reasoning_tokens(
+            messages,
+            max_tokens=MAX_TOKENS_BY_TASK.get("chat", 600),
+            disable_thinking=True,
+        ):
+            provider_used = chunk.get("provider") or provider_used
+            if chunk.get("type") == "reasoning":
+                yield {"type": "reasoning", "content": chunk.get("content", "")}
+                continue
+            text = chunk.get("content", "")
+            if text:
+                collected.append(text)
+                yield {"type": "token", "content": text}
+
+        if collected:
+            yield {
+                "type": "done",
+                "reply": self._sanitize_reply_text("".join(collected)),
+                "provider_used": provider_used or "streaming_provider",
+                "tools_used": tools_used,
+                "tool_data": tool_result,
+            }
+            return
+
+        # No provider streamed a token: fall back so the merchant still gets an answer.
+        fallback = await self.chat_with_merchant(input_data)
+        yield {"type": "token", "content": fallback.reply}
+        yield {
+            "type": "done",
+            "reply": fallback.reply,
+            "provider_used": fallback.provider_used,
+            "tools_used": fallback.tools_used,
+            "tool_data": fallback.tool_data,
+        }
+
     def _heuristic_tool_fallback(self, messages: list[dict]) -> LLMToolResponse:
         """Determines next tool step deterministically when external tool model is offline."""
         executed = {m.get("name") or (m.get("tool_call") or {}).get("name") for m in messages if m.get("name") or m.get("tool_call")}
@@ -197,14 +265,46 @@ class LLMService:
 
     def _sanitize_reply_text(self, text: str) -> str:
         """Removes stray markdown codeblock wrappers, backticks, and raw JSON wrappers."""
+        import re
         if not text:
             return ""
         clean = text.strip()
-        if clean.startswith("```json"): clean = clean[7:]
-        elif clean.startswith("```"): clean = clean[3:]
-        if clean.endswith("```"): clean = clean[:-3]
+        # If wrapped in <think>...</think>, extract what follows the thinking tag
+        clean = re.sub(r"<think>.*?</think>", "", clean, flags=re.DOTALL).strip()
+
+        # If the model output a thinking process narrative, extract the crafted reply:
+        if "thinking process" in clean.lower() or "craft" in clean.lower() or "formulate" in clean.lower():
+            match = re.search(r'(?:craft[^"]*|formulate[^"]*|structure[^"]*|construct[^"]*|the reply)[^"]*?"([^"]{30,})"', clean, re.IGNORECASE | re.DOTALL)
+            if match:
+                clean = match.group(1).strip()
+            else:
+                json_match = re.search(r'\{\s*"reply"\s*:\s*"([^"]+)"', clean)
+                if json_match:
+                    clean = json_match.group(1).strip()
+                else:
+                    lines = [l for l in clean.splitlines() if not re.match(r'^\s*(\d+\.|\*|-|Here\'s a thinking|Analyze|Identify|Map to|Construct|Let\'s|Need to|Sentence|Constraints)', l, re.IGNORECASE)]
+                    candidate = " ".join(lines).strip()
+                    if len(candidate) > 20:
+                        clean = candidate
+
+        if clean.startswith("```json"):
+            clean = clean[7:]
+        elif clean.startswith("```"):
+            clean = clean[3:]
+        if clean.endswith("```"):
+            clean = clean[:-3]
         clean = clean.strip()
         clean = clean.replace("```", "").replace("``", "")
+        # If it is a JSON object with a reply field, unwrap it
+        if clean.startswith("{") and '"reply"' in clean:
+            try:
+                parsed = json.loads(clean)
+                if parsed.get("reply"):
+                    return parsed["reply"]
+            except Exception:
+                match = re.search(r'"reply"\s*:\s*"([^"]+)"', clean)
+                if match:
+                    return match.group(1)
         return clean
 
     def _extract_json(self, raw_text: str) -> dict | None:

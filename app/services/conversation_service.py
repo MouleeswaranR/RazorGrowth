@@ -1,6 +1,5 @@
 """Conversation service for storing and vectorizing chat conversations."""
 import logging
-import json
 from datetime import datetime
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -217,35 +216,5 @@ class ConversationService:
             top_k=limit,
         )
         return results
-
-    async def get_or_create_conversation(
-        self,
-        session: AsyncSession,
-        session_id: str,
-        merchant_id: str,
-        conversation_title: str | None = None,
-    ) -> Conversation:
-        """Get the most recent conversation or create a new one."""
-        # Try to get most recent conversation in this session
-        result = await session.execute(
-            select(Conversation)
-            .where(Conversation.session_id == session_id)
-            .order_by(desc(Conversation.last_message_at))
-            .limit(1)
-        )
-        
-        existing_conversation = result.scalar_one_or_none()
-        if existing_conversation:
-            return existing_conversation
-        
-        # Create new conversation
-        return await self.create_conversation(
-            session,
-            session_id=session_id,
-            merchant_id=merchant_id,
-            conversation_title=conversation_title or "New Conversation",
-            conversation_type="chat",
-        )
-
 
 conversation_service = ConversationService()

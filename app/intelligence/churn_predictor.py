@@ -1,7 +1,7 @@
 """Computes customer churn risk scores using continuous recency decay and spend trajectory."""
 from datetime import datetime, timezone
 from app.models.customer import CustomerModel
-from app.models.order import OrderModel
+from app.models.order import OrderModel, PAID_ORDER_STATUSES
 from app.intelligence.distribution_thresholds import (
     MerchantDistributionThresholds,
     _get_default_fallback_thresholds,
@@ -58,6 +58,7 @@ def _compute_recency_risk(
 
 def _compute_frequency_decay_risk(orders: list[OrderModel]) -> float:
     """Detects whether the gap between consecutive purchases is growing over time."""
+    orders = [o for o in orders if o.status in PAID_ORDER_STATUSES]
     if len(orders) < 3:
         return 0.50
 
@@ -84,6 +85,7 @@ def _compute_frequency_decay_risk(orders: list[OrderModel]) -> float:
 
 def _compute_spend_decline_risk(orders: list[OrderModel]) -> float:
     """Detects whether average order value is declining in the recent half of order history."""
+    orders = [o for o in orders if o.status in PAID_ORDER_STATUSES]
     if len(orders) < 4:
         return 0.30
 

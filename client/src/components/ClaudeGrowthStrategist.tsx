@@ -10,7 +10,7 @@ import {
   Brain,
   Wrench,
 } from "lucide-react";
-import { chatWithGrowthAgent } from "@/services/api";
+import { chatWithGrowthAgent, streamChatWithGrowthAgent } from "@/services/api";
 import { ChatMessage } from "@/types";
 
 interface ClaudeGrowthStrategistProps {
@@ -89,7 +89,7 @@ export const ClaudeGrowthStrategist: React.FC<ClaudeGrowthStrategistProps> = ({
       role: "ai",
       content:
         "Hello! I am your autonomous RazorGrowth Manager. I continuously inspect your live session trace, customer cohorts, and A/B experiments. Ask me anything about your revenue opportunities or growth strategies!",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      timestamp: "Just now",
     },
   ]);
   const [inputQuery, setInputQuery] = useState("");
@@ -115,6 +115,21 @@ export const ClaudeGrowthStrategist: React.FC<ClaudeGrowthStrategistProps> = ({
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  // Reset conversation context whenever the active session changes
+  useEffect(() => {
+    setMessages([
+      {
+        id: `msg_init_${sessionId || "default"}`,
+        role: "ai",
+        content: `Hello! I am your autonomous RazorGrowth Manager. I am now inspecting session [${sessionId || "active"}]. Ask me anything about this session's revenue opportunities, customer cohorts, or live A/B experiments!`,
+        timestamp: "Just now",
+      },
+    ]);
+    setInputQuery("");
+    setExpandedReasoningIds(new Set());
+    setExpandedToolIds(new Set());
+  }, [sessionId]);
 
   const toggleReasoning = (id: string) => {
     setExpandedReasoningIds((prev) => {
@@ -149,7 +164,60 @@ export const ClaudeGrowthStrategist: React.FC<ClaudeGrowthStrategistProps> = ({
     setInputQuery("");
     setIsLoading(true);
 
+    const streamId = `ai_${Date.now()}`;
+    let streamedAny = false;
+
     try {
+      // Stream first so the merchant sees tokens immediately instead of a blank wait.
+      await streamChatWithGrowthAgent(
+        merchantId || "merch_demo",
+        text,
+        sessionId,
+        (event) => {
+          if (event.type === "token") {
+            if (!streamedAny) {
+              streamedAny = true;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: streamId,
+                  role: "ai",
+                  content: event.content,
+                  provider_used: "streaming",
+                  tools_used: [],
+                  tool_data: {},
+                  timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                },
+              ]);
+            } else {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === streamId ? { ...m, content: m.content + event.content } : m))
+              );
+            }
+          } else if (event.type === "done") {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === streamId
+                  ? {
+                      ...m,
+                      content: event.reply || m.content,
+                      provider_used: event.provider_used || "nvidia_nim",
+                      tools_used: event.tools_used || [],
+                      tool_data: event.tool_data || {},
+                    }
+                  : m
+              )
+            );
+          }
+        }
+      );
+
+      if (streamedAny) {
+        setIsLoading(false);
+        return;
+      }
+
+      // Stream produced nothing usable — fall back to the blocking endpoint.
       const res = await chatWithGrowthAgent(
         merchantId || "merch_demo",
         text,
@@ -336,7 +404,7 @@ export const ClaudeGrowthStrategist: React.FC<ClaudeGrowthStrategistProps> = ({
                     isUser ? "text-white/70" : "text-[var(--text-muted)]"
                   }`}
                 >
-                  <span>{msg.timestamp}</span>
+                  <span suppressHydrationWarning>{msg.timestamp}</span>
                   <button
                     onClick={() => handleCopy(msg.id, msg.content)}
                     className="hover:opacity-100 opacity-60 transition-opacity p-0.5 cursor-pointer"

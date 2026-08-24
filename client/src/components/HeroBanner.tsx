@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState } from "react";
-import Link from "next/link";
 import { RefreshCw, FolderDown, Zap, Copy, Check, ShieldAlert, Layers } from "lucide-react";
 
 interface HeroBannerProps {
@@ -101,14 +100,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
               <span>Load Local JSON & Scan</span>
             </button>
 
-            {/* Direct Link to Multi-Agent Live Trace */}
-            <Link
-              href="/trace"
-              className="flex items-center justify-center gap-2 px-5 py-2 rounded-xl font-semibold text-xs bg-[var(--bg-secondary)] hover:bg-[var(--bg-card-hover)] text-[var(--text-primary)] border border-[var(--border-strong)] transition-all duration-150 cursor-pointer shadow-2xs"
-            >
-              <Layers className="w-3.5 h-3.5 text-[var(--accent-terracotta)]" />
-              <span>Inspect Live Multi-Agent Trace &rarr;</span>
-            </Link>
+
 
             {merchantId && (
               <button

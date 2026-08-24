@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_database_session
 from app.models.customer import CustomerModel
 from app.models.payment import PaymentModel
-from app.models.order import OrderModel
+from app.models.order import OrderModel, PAID_ORDER_STATUSES
 from app.agents.growth_manager_agent import GrowthManagerAgent
 from app.services.llm_service import llm_service
 from app.services.trace_logger_service import trace_logger_service
@@ -73,6 +73,13 @@ async def scan_growth_opportunities_live(
                 step_name=event.step,
                 step_data=event.data if isinstance(event.data, dict) else {"content": event.data},
             )
+            if event.step == "7_growth_plan_finalized":
+                trace_logger_service.log_trace_step(
+                    run_id=merchant_id,
+                    session_id=session_id,
+                    step_name="2_opportunity_scan_and_ai_reasoning",
+                    step_data=event.data,
+                )
             yield f"data: {json.dumps(event.model_dump())}\n\n"
             # Visual pacing delay so each agent step is distinctly visible and inspectable
             await asyncio.sleep(0.55)
@@ -140,6 +147,13 @@ async def agentic_growth_scan_live(
                 step_name=event.step,
                 step_data=event.data if isinstance(event.data, dict) else {"content": event.data},
             )
+            if event.step == "final_plan_synthesized":
+                trace_logger_service.log_trace_step(
+                    run_id=merchant_id,
+                    session_id=session_id,
+                    step_name="2_agentic_decision_loop",
+                    step_data=event.data,
+                )
             yield f"data: {json.dumps(event.model_dump())}\n\n"
         await session.commit()
         yield "data: [DONE]\n\n"
@@ -180,7 +194,7 @@ async def stream_growth_reasoning(
     )).scalars().all()
 
     dormant_count = sum(1 for c in customers if c.customer_segment in ("VIP Dormant", "Loyal At Risk"))
-    total_gmv = sum(o.amount for o in orders if o.status == "completed")
+    total_gmv = sum(o.amount for o in orders if o.status in PAID_ORDER_STATUSES)
     success_rate = sum(1 for p in payments if p.status == "captured") / max(1, len(payments))
 
     input_data = LLMReasoningInput(
@@ -200,31 +214,66 @@ async def stream_growth_reasoning(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+async def _build_chat_input(session: AsyncSession, request: "ChatRequest") -> LLMChatInput:
+    """Assembles grounded chat input using SQL aggregates.
+
+    The prompt only needs three scalars, so aggregate in the database rather than
+    materialising every customer and order row over the network.
+    """
+    dormant_count, total_customers = (await session.execute(
+        select(
+            func.count(CustomerModel.id).filter(
+                CustomerModel.customer_segment.in_(("VIP Dormant", "Loyal At Risk"))
+            ),
+            func.count(CustomerModel.id),
+        ).where(CustomerModel.merchant_id == request.merchant_id)
+    )).one()
+
+    total_gmv = (await session.execute(
+        select(func.coalesce(func.sum(OrderModel.amount), 0.0)).where(
+            OrderModel.merchant_id == request.merchant_id,
+            OrderModel.status.in_(PAID_ORDER_STATUSES),
+        )
+    )).scalar_one()
+
+    return LLMChatInput(
+        merchant_id=request.merchant_id,
+        session_id=request.session_id,
+        query=request.query,
+        total_customers=int(total_customers or 0),
+        total_revenue=round(float(total_gmv or 0.0), 2),
+        dormant_vip_count=int(dormant_count or 0),
+    )
+
+
+@router.post("/chat-stream")
+async def chat_with_growth_strategist_stream(
+    request: ChatRequest,
+    session: AsyncSession = Depends(get_database_session),
+):
+    """Streams the strategist's answer token-by-token over SSE for immediate perceived response."""
+    import json as _json
+
+    chat_input = await _build_chat_input(session, request)
+
+    async def event_generator():
+        try:
+            async for event in llm_service.stream_chat_with_merchant(chat_input):
+                yield f"data: {_json.dumps(event)}\n\n"
+        except Exception as err:
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(err)[:200]})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.post("/chat")
 async def chat_with_growth_strategist(
     request: ChatRequest,
     session: AsyncSession = Depends(get_database_session),
 ) -> dict:
     """Answers merchant questions with targeted session-trace micro-tools and reasoning traces."""
-    customers = (await session.execute(
-        select(CustomerModel).where(CustomerModel.merchant_id == request.merchant_id)
-    )).scalars().all()
-
-    orders = (await session.execute(
-        select(OrderModel).where(OrderModel.merchant_id == request.merchant_id)
-    )).scalars().all()
-
-    dormant_count = sum(1 for c in customers if c.customer_segment in ("VIP Dormant", "Loyal At Risk"))
-    total_gmv = sum(o.amount for o in orders if o.status == "completed")
-
-    chat_input = LLMChatInput(
-        merchant_id=request.merchant_id,
-        session_id=request.session_id,
-        query=request.query,
-        total_customers=len(customers),
-        total_revenue=round(total_gmv, 2),
-        dormant_vip_count=dormant_count,
-    )
+    chat_input = await _build_chat_input(session, request)
     result = await llm_service.chat_with_merchant(chat_input)
 
     return {
@@ -273,10 +322,13 @@ async def cross_reference_sessions(
         target_summary = trace_tool_service.get_experiment_lift_summary(request.target_session_id)
         target_audience = trace_tool_service.get_audience_breakdown(request.target_session_id)
 
+    # Cross-session comparison is intentionally allowed to surface memories beyond the
+    # current session/merchant, so opt out of the strict per-merchant scoping here.
     similar_memories = vector_memory_service.find_similar_memories(
         merchant_id=request.current_session_id,
         query_text=request.query,
         top_k=4,
+        strict_merchant=False,
     )
 
     comparison_narrative = ""

@@ -2,7 +2,6 @@ import uuid
 import random
 from datetime import datetime
 from app.models.order import OrderModel
-from app.models.payment import PaymentModel
 
 
 def simulate_campaign_conversions(
@@ -71,18 +70,3 @@ def _draw_cohort_conversions(
     return converted_orders
 
 
-def generate_payment_records_for_conversions(
-    converted_orders: list[OrderModel],
-) -> list[PaymentModel]:
-    """Creates historical payment records for all simulated pre-launch conversions."""
-    return [
-        PaymentModel(
-            id=f"pay_{uuid.uuid4().hex[:14]}",
-            order_id=order.id,
-            payment_method=random.choice(["upi", "card", "upi", "netbanking"]),
-            amount=order.amount,
-            status="captured",
-            created_at=order.created_at,
-        )
-        for order in converted_orders
-    ]

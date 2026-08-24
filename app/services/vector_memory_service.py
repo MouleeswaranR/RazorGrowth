@@ -49,8 +49,15 @@ class VectorMemoryService:
         merchant_id: str,
         query_text: str,
         top_k: int = 3,
+        strict_merchant: bool = True,
     ) -> list[dict[str, Any]]:
-        """Retrieves top-k semantically relevant past episodic memories for a merchant."""
+        """Retrieves top-k semantically relevant past episodic memories for a merchant.
+
+        When ``strict_merchant`` is True (default), results are confined to the given
+        ``merchant_id``; if that merchant has no memories yet, an empty list is returned
+        rather than leaking another merchant's campaign history. Set ``strict_merchant``
+        to False only for intentionally cross-merchant/cross-session comparisons.
+        """
         total_count = self._collection.count()
         if total_count == 0:
             return []
@@ -79,6 +86,11 @@ class VectorMemoryService:
                     ]
             except Exception:
                 pass
+
+            # No memories for this specific merchant. Do not leak other merchants'
+            # history into a per-merchant scan unless explicitly allowed.
+            if strict_merchant:
+                return []
 
         try:
             results = self._collection.query(

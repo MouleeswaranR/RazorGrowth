@@ -8,6 +8,21 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_TOKENS = 1024
+
+# These models are reasoning models: a larger completion budget is spent on hidden
+# <think> tokens, so an oversized cap costs wall-clock without improving the answer.
+# Measured on nemotron-3-super-120b (3 runs each, same chat prompt):
+#   2048 -> 9.99s | 800 -> 7.83s | 600 -> 6.13s (no truncation) | 400 -> 4.03s but
+#   truncated 2 of 3 responses. 600 is the fastest budget that never truncates.
+# Tool calls emit a tiny function payload and are left at the benchmarked 1024, where
+# tool-selection accuracy measured 100%.
+MAX_TOKENS_BY_TASK = {
+    "chat": 600,
+    "tool_calling": DEFAULT_MAX_TOKENS,
+    "reasoning": DEFAULT_MAX_TOKENS,
+}
+
 
 @dataclass
 class ProviderEndpoint:
@@ -16,6 +31,15 @@ class ProviderEndpoint:
     base_url: str
     api_key: str
     model: str
+    fallback_models: tuple[str, ...] = ()
+
+    def model_chain(self) -> list[str]:
+        """Returns the tier-1 model followed by its configured fallbacks, de-duplicated."""
+        chain: list[str] = []
+        for candidate in (self.model, *self.fallback_models):
+            if candidate and candidate not in chain:
+                chain.append(candidate)
+        return chain
 
     def is_configured(self) -> bool:
         """Checks if provider has valid non-placeholder API key."""
@@ -40,10 +64,22 @@ class LLMProviderService:
     """Manages multi-provider failover across NVIDIA NIM, OpenRouter, Groq, and Mistral."""
 
     def __init__(self) -> None:
-        """Initializes provider endpoints from configuration."""
+        """Initializes provider endpoints and their benchmarked model fallback tiers."""
         self._endpoints = {
-            "nvidia_nim": ProviderEndpoint("nvidia_nim", settings.nvidia_nim_base_url, settings.nvidia_nim_api_key, settings.nvidia_nim_model),
-            "openrouter": ProviderEndpoint("openrouter", settings.openrouter_base_url, settings.openrouter_api_key, settings.agentic_model_name),
+            "nvidia_nim": ProviderEndpoint(
+                "nvidia_nim",
+                settings.nvidia_nim_base_url,
+                settings.nvidia_nim_api_key,
+                settings.nvidia_nim_model,
+                (settings.nvidia_nim_model_fallback_2, settings.nvidia_nim_model_fallback_3),
+            ),
+            "openrouter": ProviderEndpoint(
+                "openrouter",
+                settings.openrouter_base_url,
+                settings.openrouter_api_key,
+                settings.agentic_model_name,
+                (settings.openrouter_model_fallback_2, settings.openrouter_model_fallback_3),
+            ),
             "groq": ProviderEndpoint("groq", settings.groq_base_url, settings.groq_api_key, settings.groq_model),
             "mistral": ProviderEndpoint("mistral", settings.mistral_base_url, settings.mistral_api_key, settings.mistral_model),
         }
@@ -69,22 +105,18 @@ class LLMProviderService:
         tools: list[dict] | None = None,
         task: str = "reasoning",
         timeout: float = 60.0,
+        max_tokens: int | None = None,
     ) -> dict | None:
         """Executes completion across provider chain with automatic intra-provider model fallbacks."""
         chain = self.get_chain_for_task(task)
+        token_budget = max_tokens or MAX_TOKENS_BY_TASK.get(task, DEFAULT_MAX_TOKENS)
         for provider in chain:
-            models_to_try = [provider.model]
-            if provider.name == "nvidia_nim":
-                for fallback_model in ["meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct"]:
-                    if fallback_model not in models_to_try:
-                        models_to_try.append(fallback_model)
-
-            for model_name in models_to_try:
+            for model_name in provider.model_chain():
                 payload = {
                     "model": model_name,
                     "messages": messages,
                     "temperature": 0.2,
-                    "max_tokens": 1024,
+                    "max_tokens": token_budget,
                 }
                 if tools:
                     payload["tools"] = tools
@@ -145,24 +177,25 @@ class LLMProviderService:
         self,
         messages: list[dict],
         timeout: float = 60.0,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        disable_thinking: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """Streams real-time token events and thinking traces across fallback provider chain."""
         chain = self.get_chain_for_task("streaming")
         for provider in chain:
-            models_to_try = [provider.model]
-            if provider.name == "nvidia_nim":
-                for fallback_model in ["meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct"]:
-                    if fallback_model not in models_to_try:
-                        models_to_try.append(fallback_model)
-
-            for model_name in models_to_try:
+            for model_name in provider.model_chain():
                 payload = {
                     "model": model_name,
                     "messages": messages,
                     "temperature": 0.3,
-                    "max_tokens": 1024,
+                    "max_tokens": max_tokens,
                     "stream": True,
                 }
+                if disable_thinking:
+                    # Nemotron-family reasoning models buffer a long hidden <think> phase
+                    # before the first visible token, which ruins time-to-first-token for
+                    # interactive chat. Providers ignore unknown keys, so this stays safe.
+                    payload["chat_template_kwargs"] = {"thinking": False}
                 try:
                     async with httpx.AsyncClient(timeout=timeout) as client:
                         async with client.stream(
@@ -182,9 +215,9 @@ class LLMProviderService:
                                         chunk_data = json.loads(chunk_str)
                                         delta = chunk_data.get("choices", [{}])[0].get("delta", {})
                                         if "reasoning_content" in delta:
-                                            yield {"type": "reasoning", "content": delta["reasoning_content"]}
+                                            yield {"type": "reasoning", "content": delta["reasoning_content"], "provider": provider.name, "model": model_name}
                                         elif "content" in delta and delta["content"]:
-                                            yield {"type": "token", "content": delta["content"]}
+                                            yield {"type": "token", "content": delta["content"], "provider": provider.name, "model": model_name}
                                     except Exception:
                                         continue
                                 return

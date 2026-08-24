@@ -28,23 +28,6 @@ class CustomerAgent:
             and c.total_orders_count >= 2
         ]
 
-    def build_target_audience_manifest(
-        self,
-        selected_customers: list[CustomerModel],
-    ) -> list[dict]:
-        """Formats customer list into dictionary payloads for dispatch and testing."""
-        return [
-            {
-                "customer_id": c.id,
-                "name": c.name,
-                "email": c.email,
-                "favorite_category": c.favorite_category or "Apparel",
-                "segment": c.customer_segment,
-                "total_spend": round(c.total_spend_amount, 2),
-            }
-            for c in selected_customers
-        ]
-
     def build_structured_audience(
         self,
         opportunity_id: str,

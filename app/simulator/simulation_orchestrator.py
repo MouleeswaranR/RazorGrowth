@@ -10,8 +10,13 @@ from app.simulator.customer_generator import generate_synthetic_customers_batch
 from app.simulator.order_generator import generate_synthetic_orders_batch
 from app.simulator.payment_event_generator import generate_synthetic_payments_batch
 from app.intelligence.customer_segmentation import classify_customer_segment
-from app.intelligence.churn_predictor import calculate_churn_risk_score
+from app.intelligence.churn_predictor import calculate_churn_risk_with_orders
 from app.intelligence.clv_estimator import estimate_customer_lifetime_value
+from app.intelligence.distribution_thresholds import (
+    MerchantDistributionThresholds,
+    compute_merchant_distribution_thresholds,
+)
+from app.customer_360.metric_calculator import calculate_customer_order_metrics
 from app.services.snapshot_storage_service import snapshot_storage_service
 
 DEFAULT_PRODUCTS = [
@@ -37,20 +42,19 @@ def create_default_products(merchant_id: str) -> list[ProductModel]:
     ]
 
 
-def _enrich_customer_360_from_orders(
+def _populate_customer_order_metrics(
     customer: CustomerModel,
     customer_orders: list[OrderModel],
     product_map: dict[str, ProductModel],
 ) -> None:
-    """Populates Customer 360 metrics, segment, churn score, and CLV from order history."""
+    """Populates raw Customer 360 order metrics and favourite category (scoring happens later)."""
     if not customer_orders:
         return
 
-    customer.total_orders_count = len(customer_orders)
-    customer.total_spend_amount = sum(o.amount for o in customer_orders)
-
-    sorted_orders = sorted(customer_orders, key=lambda o: o.created_at, reverse=True)
-    customer.last_purchase_timestamp = sorted_orders[0].created_at
+    metrics = calculate_customer_order_metrics(customer_orders)
+    customer.total_orders_count = metrics["total_orders_count"]
+    customer.total_spend_amount = metrics["total_spend_amount"]
+    customer.last_purchase_timestamp = metrics["last_purchase_timestamp"]
 
     category_counts = Counter(
         product_map[o.product_id].category
@@ -60,11 +64,23 @@ def _enrich_customer_360_from_orders(
     if category_counts:
         customer.favorite_category = category_counts.most_common(1)[0][0]
 
-    customer.customer_segment = classify_customer_segment(customer)
-    customer.churn_risk_score = calculate_churn_risk_score(customer)
+
+def _score_customer_360(
+    customer: CustomerModel,
+    customer_orders: list[OrderModel],
+    thresholds: MerchantDistributionThresholds,
+) -> None:
+    """Assigns segment, churn risk, CLV, and repurchase probability against merchant distribution."""
+    if not customer_orders:
+        return
+
+    customer.customer_segment = classify_customer_segment(customer, thresholds)
+    customer.churn_risk_score = calculate_churn_risk_with_orders(
+        customer, customer_orders, thresholds
+    )
     customer.predicted_lifetime_value = estimate_customer_lifetime_value(customer)
 
-    aov = customer.total_spend_amount / customer.total_orders_count
+    aov = customer.total_spend_amount / max(1, customer.total_orders_count)
     frequency_factor = min(1.0, customer.total_orders_count / 10.0)
     recency_factor = 1.0 - customer.churn_risk_score
     customer.repurchase_probability = round(
@@ -107,9 +123,18 @@ async def run_full_merchant_simulation(
         orders_by_customer.setdefault(order.customer_id, []).append(order)
 
     segment_distribution: dict[str, int] = Counter()
+
+    # Pass 1: populate raw order metrics so the distribution can be measured from them.
     for customer in customer_models:
-        _enrich_customer_360_from_orders(
+        _populate_customer_order_metrics(
             customer, orders_by_customer.get(customer.id, []), product_map
+        )
+
+    # Pass 2: score every customer against this merchant's own empirical distribution.
+    thresholds = compute_merchant_distribution_thresholds(customer_models, payments)
+    for customer in customer_models:
+        _score_customer_360(
+            customer, orders_by_customer.get(customer.id, []), thresholds
         )
         segment_distribution[customer.customer_segment] += 1
 

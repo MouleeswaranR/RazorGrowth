@@ -1,6 +1,6 @@
 """API endpoints for session and conversation management."""
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.database.session import AsyncSessionLocal
 from app.services.session_management_service import session_management_service

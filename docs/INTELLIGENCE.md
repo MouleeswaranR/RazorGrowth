@@ -62,28 +62,39 @@ flowchart TD
 
 ---
 
-## 3. RFM Customer Segmentation Model
+## 3. Empirical Distribution Quantiles & RFM Segmentation
 
-- **File**: `app/intelligence/customer_segmentation.py`
-- **Logic**: Classifies customers into 6 distinct behavioral cohorts based on Recency, Frequency, and Monetary spend thresholds.
+- **Files**: `app/intelligence/distribution_thresholds.py`, `app/intelligence/customer_segmentation.py`
+- **Logic**: Automatically extracts empirical population percentiles ($P_{90}$, $P_{75}$, $P_{50}$) for total spend, order count, and inactivity recency per merchant, ensuring zero hardcoded magic constants.
+
+### Dynamic Quantile Calibration Matrix
+
+```
+VIP Spend Threshold (P_90)      = np.percentile(spends, 90)
+Loyal Frequency Threshold (P_75)= np.percentile(orders, 75)
+Median Recency Days (P_50)      = np.percentile(recencies, 50)
+Dormancy Recency Threshold (P_80)= np.percentile(recencies, 80)
+RFM Normalization Anchors       = 95th percentile spend, orders, and recency
+Payment Success Baseline        = 75th percentile method success rate
+```
 
 ### Cohort Classification Rules
 
 ```mermaid
 flowchart TD
-    Start["Customer Evaluation"] --> SpendCheck{"Total Spend >= 8,000 INR?"}
+    Start["Customer Evaluation"] --> SpendCheck{"Total Spend >= P90 Spend?"}
     
-    SpendCheck -->|Yes| RecCheckVIP{"Days Inactive <= 30?"}
+    SpendCheck -->|Yes| RecCheckVIP{"Days Inactive <= P50 Recency?"}
     RecCheckVIP -->|Yes| Seg1["VIP Active"]
     RecCheckVIP -->|No| Seg2["VIP Dormant"]
     
-    SpendCheck -->|No| FreqCheck{"Orders >= 4 OR Spend >= 4,000 INR?"}
-    FreqCheck -->|Yes| RecCheckLoyal{"Days Inactive <= 45?"}
+    SpendCheck -->|No| FreqCheck{"Orders >= P75 Orders?"}
+    FreqCheck -->|Yes| RecCheckLoyal{"Days Inactive <= P50 Recency?"}
     RecCheckLoyal -->|Yes| Seg3["Loyal"]
-    RecCheckLoyal -->|No| Seg4["Loyal At Risk"]
+    RecCheckLoyal -->|No| Seg4["Loyal At Risk (<= P80) / At Risk"]
     
     FreqCheck -->|No| OrderCountCheck{"Orders == 1?"}
-    OrderCountCheck -->|Yes| Seg5["New / One-Time"]
+    OrderCountCheck -->|Yes| Seg5["New (Recent) / One-Time (Past P80)"]
     OrderCountCheck -->|No| Seg6["Standard"]
 ```
 
@@ -92,40 +103,31 @@ flowchart TD
 ## 4. Churn Risk Prediction Engine
 
 - **File**: `app/intelligence/churn_predictor.py`
-- **Model**: A 3-factor composite risk index producing a continuous score between `0.00` (zero risk) and `1.00` (definite churn).
+- **Model**: A continuous 3-factor composite risk index producing a smooth score between `0.00` (zero risk) and `1.00` (definite churn).
 
 ```
 Churn Risk = 0.50 * R_recency + 0.30 * R_frequency_decay + 0.20 * R_spend_decline
 ```
 
-### Factor 1: Recency Risk (`R_recency`)
-Evaluates inactivity duration:
-- `<= 7 days`: `0.05`
-- `8 - 15 days`: `0.15`
-- `16 - 30 days`: `0.40`
-- `31 - 45 days`: `0.65`
-- `46 - 60 days`: `0.80`
-- `> 60 days`: `0.95`
+### Factor 1: Smooth Continuous Recency Risk (`R_recency`)
+Evaluates inactivity duration as a continuous power CDF against the merchant's 80th-percentile dormancy anchor:
+```
+R_recency = min(1.0, max(0.02, (days_inactive / (P_80_dormancy * 1.25)) ^ 1.15))
+```
 
-### Factor 2: Purchase Interval Growth (`R_frequency_decay`)
+### Factor 2: Continuous Purchase Interval Growth (`R_frequency_decay`)
 Measures whether the inter-purchase interval between consecutive orders is expanding:
 ```
 Decay Ratio = Mean Gap (Second Half of Orders) / Mean Gap (First Half of Orders)
+R_frequency_decay = min(1.0, max(0.05, 0.35 * Decay Ratio))
 ```
-- `Decay Ratio <= 1.0`: `0.10` (accelerating purchase frequency)
-- `1.0 < Decay Ratio <= 1.5`: `0.40` (slight slowdown)
-- `1.5 < Decay Ratio <= 2.5`: `0.70` (significant deceleration)
-- `Decay Ratio > 2.5`: `0.90` (rapid drop-off)
 
 ### Factor 3: Spend Trajectory Decline (`R_spend_decline`)
 Compares Average Order Value of recent orders versus earlier orders:
 ```
 Spend Ratio = AOV (Recent Half) / AOV (Earlier Half)
+R_spend_decline = min(0.95, max(0.05, 1.05 - Spend Ratio))
 ```
-- `Spend Ratio >= 1.0`: `0.05` (increasing or stable basket size)
-- `0.75 <= Spend Ratio < 1.0`: `0.30` (mild decline)
-- `0.50 <= Spend Ratio < 0.75`: `0.65` (steep basket drop)
-- `Spend Ratio < 0.50`: `0.90` (severe degradation)
 
 ---
 
@@ -134,12 +136,13 @@ Spend Ratio = AOV (Recent Half) / AOV (Earlier Half)
 - **File**: `app/intelligence/clv_estimator.py`
 - **Formula**:
 ```
-CLV_predicted = Historical Spend + (AOV * Expected Annual Orders * (1 - Churn Risk))
+CLV_predicted = AOV * Annual Frequency Estimate * Churn Discount Factor
 ```
 
 Where:
-- `Expected Annual Orders = max(1.0, (Historical Orders / max(30, Customer Age in Days)) * 365 * 0.85)`
-- Clamped between `1.0 * Historical Spend` and `5.0 * Historical Spend`.
+- `Annual Frequency Multiplier = 1.15 + (0.75 / (1.0 + 0.35 * ln(Orders + 1)))`
+- `Churn Discount Factor = max(0.20, 1.0 - (Churn Risk * 0.60))`
+- Clamped with a lower bound of historical spend.
 
 ---
 
@@ -153,31 +156,31 @@ Where:
      ```
      Confidence(A -> B) = Count(Orders with A and B) / Count(Orders with A)
      ```
-  4. Filters for candidate customers who have purchased Category A but have zero historical purchases in Category B, filtering out high-churn accounts (`churn < 0.60`).
+  4. Filters for candidate customers who have purchased Category A but have zero historical purchases in Category B, filtering out high-churn accounts (`churn < 0.90`).
 
 ---
 
 ## 7. Payment Method Performance Analyzer
 
 - **File**: `app/intelligence/payment_method_analyzer.py`
-- **Benchmark**: Compares observed method success rates against industry standard benchmarks (`92.0%` for UPI/Cards).
+- **Benchmark**: Compares observed method success rates against the merchant's empirical $P_{75}$ baseline rate.
 - **Calculations**:
   - Success Rate: `Captured Transactions / Total Transactions`
-  - Performance Gap: `Delta = Benchmark Rate - Current Rate`
+  - Performance Gap: `Delta = Empirical Benchmark Rate - Current Rate`
   - Estimated Lost GMV: `Sum of Failed Transaction Amounts`
   - Recoverable GMV: `Estimated Lost GMV * 0.60`
 
 ---
 
-## 8. Dynamic Opportunity Detection Engines
+## 8. Distribution-Aware Opportunity Detection Engines
 
 - **File**: `app/intelligence/opportunity_detector.py`
 
 | Opportunity Type | Eligibility Criteria | Estimated GMV Impact | Confidence Score Formula |
 |---|---|---|---|
-| **Dormant VIP Recovery** | ≥ 3 customers in `VIP Dormant` or `Loyal At Risk` with spend ≥ 5,000 INR | `Count * AOV * 0.70` | `clamp(0.60 + 1.5 * (dormant_vips / total_customers), 0.60, 0.92)` |
-| **Payment Method Optimization** | Payment method with ≥ 20 attempts and success rate < 92.0% | `Sum of Recoverable GMV` | `clamp(0.50 + 2.0 * (benchmark - current), 0.50, 0.95)` |
-| **Cross-Sell Affinity** | Best Category pair `A -> B` with confidence ≥ 10% and ≥ 2 active candidates | `Candidates * 1800 * Confidence` | `round(best_confidence, 2)` |
-| **Proactive Churn Intervention** | ≥ 3 repeat customers with accelerating interval decay and churn risk 0.60 ≤ risk < 0.85 | `Count * AOV * 0.40` | `clamp(0.60 + 1.8 * (candidates / total_customers), 0.60, 0.88)` |
-| **Tiered Basket Builder** | ≥ 3 active repeat customers (≥ 3 orders) with below-average basket spend (< 2,200 INR) | `Count * 2 * Delta_AOV` | `0.82 (fixed empirical benchmark)` |
+| **Dormant VIP Recovery** | ≥ 2 customers in `VIP Dormant` or `Loyal At Risk` with spend ≥ $P_{90} \times 0.60$ | `Count * AOV * 0.70` | `clamp(0.60 + 1.5 * (dormant_vips / total_customers), 0.60, 0.92)` |
+| **Payment Method Optimization** | Payment method with ≥ 5 attempts and success rate < Empirical Baseline | `Sum of Recoverable GMV` | `clamp(0.50 + 2.0 * (benchmark - current), 0.50, 0.95)` |
+| **Cross-Sell Affinity** | Best Category pair `A -> B` with confidence ≥ 5% and ≥ 1 active candidates | `Candidates * Median_AOV * Confidence` | `round(max(0.65, best_confidence), 2)` |
+| **Proactive Churn Intervention** | ≥ 2 repeat customers with churn risk 0.40 ≤ risk < 0.90 | `Count * Mean_Spend * 0.40` | `clamp(0.60 + 1.8 * (candidates / total_customers), 0.60, 0.88)` |
+| **Tiered Basket Builder** | ≥ 2 active repeat customers (≥ 2 orders) with order value < $1.25 \times \text{Median AOV}$ | `Count * 2 * Delta_AOV` | `0.82 (calibrated empirical lift)` |
 

@@ -78,13 +78,19 @@ class GrowthManagerAgent:
 
 ---
 
-### 2.2 CustomerAgent (Audience Selection)
+### 2.2 CustomerAgent (Audience Selection & Cohort Formulation)
 - **File**: `app/agents/customer_agent.py`
-- **Role**: Filters and prioritizes target customers based on RFM segment, churn risk score, and predicted CLV. Ensures high-risk or low-margin customers are handled appropriately.
-- **Filtering Rules**:
-  - **VIP Dormant**: Customers in `VIP Dormant` or `Loyal At Risk` segments with historical spend >= 5,000 INR.
-  - **Active Cohorts**: Customers with churn risk < 0.60 and at least 1 historical order.
-  - **Ranking**: Sorted by `(total_spend_amount, predicted_lifetime_value)` descending.
+- **Role**: Filters and prioritizes target cohorts matching specific growth opportunities using empirical population percentiles ($P_{90}$, $P_{75}$, $P_{50}$), churn risk trajectories, and predictive CLV.
+- **Cohort Formulation & Calculation Matrix**:
+
+| Cohort Type | Exact Population Selection Filter | Prioritization & Ranking Logic |
+| :--- | :--- | :--- |
+| **VIP Dormant** | Customers in `VIP Dormant` or `Loyal At Risk` where Lifetime Spend $\ge P_{90} \times 0.60$ and Recency $> P_{50}$ Median. | Sorted by `total_spend_amount * predicted_lifetime_value` descending. |
+| **Proactive Churn Intervention** | Repeat shoppers with expanding purchase intervals where $0.40 \le \text{Churn Risk} < 0.90$ and Orders $\ge 1$. | Sorted by `churn_risk_score * total_spend_amount` descending. |
+| **Cross-Sell Affinity** | Shoppers who purchased Category $A$, have not yet purchased Category $B$ (Association Confidence $\ge 5\%$), and $\text{Churn Risk} < 0.90$. | Ranked by historical category affinity and CLV. |
+| **Tiered Basket Builder** | Active repeat customers ($\ge 2$ orders) whose historical $\text{AOV} < 1.25 \times \text{Median AOV}$ and $\text{Churn Risk} < 0.75$. | Ranked by total order frequency and expansion potential. |
+| **Payment Friction Recovery** | Shoppers who experienced checkout drop-offs on underperforming payment methods ($\text{Success Rate} < \text{Empirical Baseline}$). | Ranked by failed transaction amount and recovery likelihood. |
+
 - **Output Schema**: `AudienceSelectionOutput` with `total_audience_count`, `target_customers` manifest, and `reasoning`.
 
 **Output JSON Example:**
@@ -98,13 +104,12 @@ class GrowthManagerAgent:
       "customer_id": "cust_101",
       "name": "Priya Sharma",
       "email": "priya.s@example.com",
-      "total_spend": 16400.0,
-      "total_orders": 7,
-      "predicted_clv": 24500.0,
-      "churn_risk": 0.72
+      "total_spend": 18500.0,
+      "churn_risk": 0.58,
+      "predicted_clv": 24200.0
     }
   ],
-  "reasoning": "Selected 25 high-value dormant VIPs with high historical spend but elevated 30-day inactivity."
+  "reasoning": "Selected 25 customers from the top spend quantile (P90 >= ₹8,400) who have been inactive beyond the store median recency (32 days)."
 }
 ```
 
@@ -170,6 +175,16 @@ class GrowthManagerAgent:
 
 ---
 
+### 2.6 AgentConsensusBuilder (Multi-Agent Agreement Engine)
+- **File**: `app/agents/agent_consensus.py`
+- **Role**: Combines competing or complementary recommendations from multiple analytical and domain agents into a unified, high-confidence decision.
+- **Supported Consensus Strategies**:
+  1. **Confidence-Weighted Consensus (`confidence_weighted`)**: Ranks recommendations by individual agent confidence scores and selects the top recommendation while computing peer agreement percentages.
+  2. **Majority Voting (`majority`)**: Clusters similar recommendations and selects the policy supported by > 50% of participating agents, falling back to highest-confidence if no majority emerges.
+  3. **Unanimous Consensus (`unanimous`)**: Enforces 100% agreement across all participating agents before certifying an autonomous execution.
+
+---
+
 ## 3. PermissionGateService (Autonomous Safety Guardrails)
 
 - **File**: `app/services/permission_gate_service.py`
@@ -187,14 +202,19 @@ class GrowthManagerAgent:
 
 ## 4. Multi-Provider LLM & ReAct Tool-Calling Architecture
 
-### 4.1 Zero-Downtime Provider Cascade
-`LLMProviderService` (`app/services/llm_provider_service.py`) manages automatic multi-model failover:
+### 4.1 Benchmarked 3-Tier Multi-Model Cascade
+`LLMProviderService` (`app/services/llm_provider_service.py`) manages automatic multi-tier failover across providers:
 
-1. **Primary**: `nvidia_nim` (`meta/llama-3.3-70b-instruct`) — Ultra low-latency tool-calling and reasoning.
-2. **Fallback 1**: `openrouter` (`deepseek/deepseek-chat`) — High-precision economic reasoning.
-3. **Fallback 2**: `groq` (`llama-3.3-70b-versatile`) — Fast speculative execution.
-4. **Fallback 3**: `mistral` (`mistral-small-latest`) — Concise multilingual reasoning.
-5. **Fallback 4**: **Deterministic Heuristic Engine** — Offline analytical rules guaranteeing 100% operational uptime.
+1. **NVIDIA NIM (Primary Provider)**:
+   - **Tier 1**: `nvidia/nemotron-3-super-120b-a12b` (100% tool accuracy @ 2.16s)
+   - **Tier 2**: `nvidia/llama-3.3-nemotron-super-49b-v1.5` (100% tool accuracy @ 24.6s)
+   - **Tier 3**: `nvidia/nemotron-3.5-lightning-30b-a3b` (78% tool accuracy @ 4.78s)
+2. **OpenRouter (Secondary Fallback)**:
+   - **Tier 1**: `nvidia/nemotron-3-super-120b-a12b:free` (100% tool accuracy @ 2.10s)
+   - **Tier 2**: `nvidia/nemotron-3-ultra-550b-a55b:free` (89% tool accuracy @ 3.93s)
+   - **Tier 3**: `liquid/lfm-2.5-2.6b:free` (67% accuracy @ 1.29s for vendor diversity)
+3. **Groq & Mistral (Streaming & Speculative Execution)**
+4. **Deterministic Heuristic Engine**: Offline analytical rules guaranteeing 100% operational uptime.
 
 ### 4.2 Bounded Agentic ReAct Tool Registry
 `AgenticOrchestrator` (`app/agents/agentic_orchestrator.py`) empowers the LLM to autonomously inspect telemetry and formulate growth plans via 6 domain tools (`app/agents/tool_registry.py`):
@@ -207,4 +227,5 @@ class GrowthManagerAgent:
 | `recommend_offer` | OfferAgent | Calibrates margin-safe discount parameters and urgency terms. |
 | `recall_similar_past_campaigns` | VectorMemoryService (ChromaDB) | Semantically retrieves historical campaign outcomes via FastEmbed 384-dim dense vectors. |
 | `check_permission_gate` | PermissionGateService | Validates proposed campaigns against dynamic financial guardrails. |
+
 

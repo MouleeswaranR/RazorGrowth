@@ -242,6 +242,63 @@ export async function chatWithGrowthAgent(
   return res.json();
 }
 
+export type ChatStreamEvent =
+  | { type: "tools"; tools_used: string[]; tool_data: Record<string, any> }
+  | { type: "reasoning"; content: string }
+  | { type: "token"; content: string }
+  | {
+      type: "done";
+      reply: string;
+      provider_used?: string;
+      tools_used?: string[];
+      tool_data?: Record<string, any>;
+    }
+  | { type: "error"; message: string };
+
+/**
+ * Streams a strategist answer over SSE, invoking onEvent for each frame.
+ * Uses POST (EventSource cannot POST), so it reads the body as a byte stream.
+ */
+export async function streamChatWithGrowthAgent(
+  merchantId: string,
+  query: string,
+  sessionId: string | undefined,
+  onEvent: (event: ChatStreamEvent) => void
+): Promise<void> {
+  const res = await apiFetch(`/growth/chat-stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ merchant_id: merchantId, session_id: sessionId, query }),
+  });
+  if (!res.ok || !res.body) throw new Error(`Chat stream failed: ${res.statusText}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by a blank line; keep any partial tail in the buffer.
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      const line = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) continue;
+      const payload = line.slice(6).trim();
+      if (payload === "[DONE]") return;
+      try {
+        onEvent(JSON.parse(payload) as ChatStreamEvent);
+      } catch {
+        // Ignore malformed frames rather than aborting the whole stream.
+      }
+    }
+  }
+}
+
 export async function listSessions(): Promise<{
   status: string;
   total_sessions: number;

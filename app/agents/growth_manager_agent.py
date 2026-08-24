@@ -4,7 +4,6 @@ from app.models.customer import CustomerModel
 from app.models.order import OrderModel
 from app.models.payment import PaymentModel
 from app.models.product import ProductModel
-from app.models.opportunity import OpportunityModel
 from app.intelligence.opportunity_detector import detect_all_opportunities
 from app.agents.customer_agent import CustomerAgent
 from app.agents.offer_agent import OfferAgent
@@ -75,6 +74,13 @@ class GrowthManagerAgent:
 
         top = ranked[0]
 
+        # 2b. Recall similar past campaigns from ChromaDB vector memory
+        from app.services.vector_memory_service import vector_memory_service
+        recall_query = f"{top.title} {top.opportunity_type} discount recovery"
+        memory_citations = vector_memory_service.find_similar_memories(
+            merchant_id, recall_query, top_k=3
+        )
+
         # 3. CustomerAgent builds structured audience
         if top.opportunity_type == "customer_churn_prevention":
             audience_models = self._customer_agent.filter_dormant_high_value_customers(customer_list)
@@ -101,10 +107,12 @@ class GrowthManagerAgent:
             favorite_category="Apparel",
         )
 
-        # 6. PermissionGateService evaluates safety policies
+        # 6. PermissionGateService evaluates safety policies against real store telemetry
         gate_decision = permission_gate_service.evaluate_campaign_safety(
             offer=structured_offer,
             audience=structured_audience,
+            total_customers=len(customer_list),
+            total_gmv=sum(c.total_spend_amount for c in customer_list),
         )
 
         # 7. LLMService generates executive reasoning using structured input
@@ -165,6 +173,7 @@ class GrowthManagerAgent:
                 for o in ranked
             ],
             "action_plan": plan.model_dump(),
+            "memory_citations": memory_citations,
         }
 
     async def stream_full_growth_scan(
@@ -239,6 +248,19 @@ class GrowthManagerAgent:
             data={"opportunities": opp_list, "top_opportunity": top.title},
         )
 
+        # Step 2b: Recall similar past campaigns from ChromaDB vector memory
+        from app.services.vector_memory_service import vector_memory_service
+        recall_query = f"{top.title} {top.opportunity_type} discount recovery"
+        recalled_memories = vector_memory_service.find_similar_memories(
+            merchant_id, recall_query, top_k=3
+        )
+        yield StepEvent(
+            step="2b_vector_memory_recall",
+            step_number=2,
+            summary=f"Retrieved {len(recalled_memories)} similar past campaign benchmarks from ChromaDB.",
+            data={"query": recall_query, "retrieved_memories": recalled_memories},
+        )
+
         # Step 3: CustomerAgent audience selection
         if top.opportunity_type == "customer_churn_prevention":
             audience_models = self._customer_agent.filter_dormant_high_value_customers(customer_list)
@@ -279,14 +301,16 @@ class GrowthManagerAgent:
         yield StepEvent(
             step="5_copy_composed",
             step_number=5,
-            summary=f"Generated individualized messaging for Email/WhatsApp channels.",
+            summary="Generated individualized messaging for Email/WhatsApp channels.",
             data=structured_copy.model_dump(),
         )
 
-        # Step 6: PermissionGate policy evaluation
+        # Step 6: PermissionGate policy evaluation against real store telemetry
         gate_decision = permission_gate_service.evaluate_campaign_safety(
             offer=structured_offer,
             audience=structured_audience,
+            total_customers=len(customer_list),
+            total_gmv=sum(c.total_spend_amount for c in customer_list),
         )
         yield StepEvent(
             step="6_permission_gate_evaluated",

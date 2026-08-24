@@ -1,5 +1,4 @@
 import logging
-from typing import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +31,6 @@ class EmbeddingService:
 
         # Deterministic semantic hash projection fallback
         return self._generate_deterministic_fallback(text)
-
-    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
-        """Encodes batch of text strings into normalized dense vector representations."""
-        return [self.embed_text(t) for t in texts]
 
     def _generate_deterministic_fallback(self, text: str) -> list[float]:
         """Produces a deterministic normalized vector fallback based on text token hashing."""

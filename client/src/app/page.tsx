@@ -95,7 +95,7 @@ export default function DashboardPage() {
   const [isTourOpen, setIsTourOpen] = useState<boolean>(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [logs, setLogs] = useState<string[]>([
-    `[${new Date().toLocaleTimeString()}] RazorGrowth AI initialized with Razorpay Sandbox & Neon PostgreSQL.`,
+    "[System] RazorGrowth AI initialized with Razorpay Sandbox & Neon PostgreSQL.",
   ]);
 
   const addLog = (msg: string) => {
@@ -190,22 +190,68 @@ export default function DashboardPage() {
         setMerchantId(merchant);
 
         const steps = tracePayload.steps || {};
-        const step2 = steps["2_opportunity_scan_and_ai_reasoning"]?.data;
+        const step1 = steps["1_dataset_generation"]?.data || steps["step_1_get_merchant_context"]?.data;
+        const step2Det = steps["2_opportunity_scan_and_ai_reasoning"]?.data;
+        const step2Agentic = steps["2_agentic_decision_loop"]?.data;
         const step3 = steps["3_campaign_launch_and_dispatch"]?.data;
         const step4 = steps["4_experiment_ab_lift_measurement"]?.data;
 
-        if (step2?.opportunities) {
-          setOpportunities(step2.opportunities);
-          setCurrentStage(3);
+        // Fetch customer 360 data strictly for this session's merchant
+        if (merchant) {
+          try {
+            const custList = await listCustomers(merchant, 100);
+            setCustomers(custList);
+          } catch (err) {
+            console.warn("Failed to fetch customers for session merchant:", err);
+          }
         }
 
+        if (step1) {
+          setTotalOrders(step1.orders_created || (step1.total_customers ? step1.total_customers * 4 : 2000));
+        }
+
+        // Restore growth opportunities from either deterministic or agentic scan
+        const oppsFromAgentic = step2Agentic?.steps_taken?.find(
+          (s: any) => s.tool_name === "detect_opportunities"
+        )?.result?.opportunities;
+
+        const sessionOpps = step2Det?.opportunities || oppsFromAgentic || [];
+        if (sessionOpps.length > 0) {
+          setOpportunities(sessionOpps);
+          setCurrentStage(3);
+        } else if (merchant) {
+          try {
+            const scanRes = await scanOpportunities(merchant, targetSessionId);
+            if (scanRes?.opportunities && scanRes.opportunities.length > 0) {
+              setOpportunities(scanRes.opportunities);
+              setCurrentStage(3);
+            }
+          } catch (err) {
+            console.warn("Rescan on session switch:", err);
+          }
+        }
+
+        // Restore reasoning trace
+        if (step2Det?.action_plan?.ai_reasoning) {
+          setGrowthReasoning(step2Det.action_plan.ai_reasoning);
+        } else if (step2Agentic?.plan_summary) {
+          setGrowthReasoning(step2Agentic.plan_summary);
+        }
+
+        // Restore launched campaign and offer details
         if (step3?.campaign_id && step3?.opportunity_id) {
           setLaunchedOppIds(new Set([step3.opportunity_id]));
           setOppToCampIdMap({ [step3.opportunity_id]: step3.campaign_id });
-          if (step3.offer) setCampaignOffersMap({ [step3.opportunity_id]: step3.offer });
+          if (step3.offer) {
+            setCampaignOffersMap({ [step3.opportunity_id]: step3.offer });
+          }
+          if (step3.checkout_sessions && step3.checkout_sessions.length > 0) {
+            setCheckoutSessionsMap({ [step3.opportunity_id]: step3.checkout_sessions[0] });
+          }
           setCurrentStage(5);
         }
 
+        // Restore A/B experiment lift metrics and payment status
         if (step4?.metrics && step3?.opportunity_id) {
           setCompletedPaymentOppIds(new Set([step3.opportunity_id]));
           setCampaignMetricsMap({ [step3.opportunity_id]: step4.metrics });
@@ -418,6 +464,9 @@ export default function DashboardPage() {
     setOppToCampIdMap({});
     setPendingGate(null);
     setPendingOpportunityId(null);
+    setTraceData(null);
+    setCustomers([]);
+    setTotalOrders(0);
     setCurrentStage(1);
   };
 
@@ -686,6 +735,7 @@ export default function DashboardPage() {
           <AgentTraceView
             traceData={traceData}
             sessionId={sessionId}
+            merchantId={merchantId}
             onRefreshTrace={() => refreshTrace()}
           />
         )}

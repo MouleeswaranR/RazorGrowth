@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
+import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -16,8 +17,36 @@ async def lifespan(app: FastAPI):
     register_default_event_consumers()
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+    await _warm_up_rag()
     yield
     await engine.dispose()
+
+
+async def _warm_up_rag() -> None:
+    """Pre-loads the embedding model and ChromaDB collection at boot.
+
+    Both are lazily constructed on first use, which otherwise charges the first real
+    request roughly 1.9s of one-time model/collection init. Steady-state retrieval is
+    ~7ms, so paying this cost at startup keeps the first scan or chat as fast as the rest.
+    """
+    import asyncio
+
+    def _prime() -> int:
+        from app.services.vector_memory_service import vector_memory_service
+
+        vector_memory_service.find_similar_memories(
+            merchant_id="__warmup__",
+            query_text="dormant vip recovery discount benchmark",
+            top_k=1,
+        )
+        return vector_memory_service._collection.count()
+
+    try:
+        started = time.perf_counter()
+        count = await asyncio.to_thread(_prime)
+        print(f"[Warm-up] RAG ready in {time.perf_counter() - started:.2f}s ({count} memories indexed)")
+    except Exception as err:
+        print(f"[Warm-up] RAG pre-load skipped: {err}")
 
 
 app = FastAPI(
@@ -76,8 +105,8 @@ async def detailed_health_check() -> dict:
     
     # Razorpay
     try:
-        from app.integrations.razorpay_client import get_razorpay_client
-        client = get_razorpay_client()
+        from app.integrations.razorpay_client import razorpay_client
+        _ = razorpay_client
         checks["razorpay"] = "✅ Configured"
     except Exception as e:
         checks["razorpay"] = f"❌ Error: {str(e)}"
@@ -89,7 +118,7 @@ async def detailed_health_check() -> dict:
     # Vector Memory
     try:
         from app.services.vector_memory_service import VectorMemoryService
-        svc = VectorMemoryService()
+        VectorMemoryService()
         checks["vector_memory"] = "✅ Ready"
     except Exception as e:
         checks["vector_memory"] = f"⚠️ Warning: {str(e)}"
@@ -101,3 +130,47 @@ async def detailed_health_check() -> dict:
         "checks": checks,
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+@app.get("/metrics")
+async def metrics_endpoint() -> dict:
+    """Returns application metrics in JSON format (Prometheus-compatible)."""
+    from app.services.metrics_service import metrics_service
+    from app.services.cache_service import query_cache_service
+    from app.services.agent_performance_tracker import agent_performance_tracker
+    
+    return {
+        "metrics": metrics_service.get_metrics(),
+        "cache_stats": query_cache_service.get_stats(),
+        "agent_stats": agent_performance_tracker.get_all_stats(),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+@app.get("/metrics/prometheus")
+async def metrics_prometheus() -> str:
+    """Returns metrics in Prometheus text format."""
+    from app.services.metrics_service import metrics_service
+    return metrics_service.export_prometheus_format()
+
+
+@app.get("/metrics")
+async def metrics_endpoint() -> dict:
+    """Returns application metrics in JSON format (Prometheus-compatible)."""
+    from app.services.metrics_service import metrics_service
+    from app.services.cache_service import query_cache_service
+    from app.services.agent_performance_tracker import agent_performance_tracker
+    
+    return {
+        "metrics": metrics_service.get_metrics(),
+        "cache_stats": query_cache_service.get_stats(),
+        "agent_stats": agent_performance_tracker.get_all_stats(),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+@app.get("/metrics/prometheus")
+async def metrics_prometheus() -> str:
+    """Returns metrics in Prometheus text format."""
+    from app.services.metrics_service import metrics_service
+    return metrics_service.export_prometheus_format()

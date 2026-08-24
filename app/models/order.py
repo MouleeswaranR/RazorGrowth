@@ -5,6 +5,11 @@ from sqlalchemy import String, Float, Integer, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.base import Base
 
+# Statuses that represent money actually received. Orders outside this set (notably
+# "pending_checkout" sessions created for A/B cohorts) must never count toward
+# customer spend, recency, or merchant GMV.
+PAID_ORDER_STATUSES: tuple[str, ...] = ("completed", "paid")
+
 
 class OrderModel(Base):
     """Represents an order placed by a customer linked to Razorpay test orders."""

@@ -186,6 +186,8 @@ async def launch_campaign(
         },
     )
 
+    mock_order_count = sum(1 for s in checkout_sessions if s.get("is_mock"))
+
     return {
         "status": "launched",
         "campaign_id": campaign.id,
@@ -198,5 +200,7 @@ async def launch_campaign(
         "offer": structured_offer.model_dump(),
         "checkout_sessions": checkout_sessions[:5],
         "total_test_orders": len(checkout_sessions),
+        "live_razorpay_orders": len(checkout_sessions) - mock_order_count,
+        "mock_razorpay_orders": mock_order_count,
     }
 

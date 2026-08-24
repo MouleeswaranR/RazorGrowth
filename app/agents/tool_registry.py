@@ -107,19 +107,46 @@ class ToolRegistry:
         self._offer_agent = OfferAgent()
 
     async def _resolve_merchant_records(self, session: AsyncSession, merchant_id: str):
-        """Fetches customer, order, payment, and product records for the target merchant."""
+        """Fetches customer, order, payment, and product records for the target merchant.
+
+        Scoped strictly to the requested merchant: an unknown or empty merchant yields
+        empty record sets rather than silently substituting another merchant's data.
+        """
         customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
         if not customers:
-            first_cust = (await session.execute(select(CustomerModel))).scalars().first()
-            if first_cust:
-                merchant_id = first_cust.merchant_id
-                customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
+            logger.warning(f"No customers found for merchant '{merchant_id}'; returning empty record set.")
+            return merchant_id, [], [], [], []
 
         orders = (await session.execute(select(OrderModel).where(OrderModel.merchant_id == merchant_id))).scalars().all()
         payments = (await session.execute(select(PaymentModel).join(OrderModel, PaymentModel.order_id == OrderModel.id).where(OrderModel.merchant_id == merchant_id))).scalars().all()
         products = (await session.execute(select(ProductModel).where(ProductModel.merchant_id == merchant_id))).scalars().all()
 
         return merchant_id, list(customers), list(orders), list(payments), list(products)
+
+    def _select_cohort_for_opportunity(
+        self,
+        opportunity_type: str,
+        customers: list[CustomerModel],
+    ) -> tuple[str, list[CustomerModel]]:
+        """Maps an opportunity type to its target segment and filtered cohort.
+
+        Mirrors the branching used by the campaign launch route so an agentic scan and a
+        deterministic launch resolve the same audience for the same opportunity type.
+        """
+        if opportunity_type in ("customer_churn_prevention", "churn_prevention"):
+            return "VIP Dormant", self._customer_agent.filter_dormant_high_value_customers(customers)
+
+        if opportunity_type in ("payment_optimization", "payment_recovery"):
+            slice_size = max(1, int(len(customers) * 0.20))
+            return "payment_optimization", list(customers)[:slice_size]
+
+        if opportunity_type in ("cross_sell_affinity", "cross_sell", "product_recommendation"):
+            return "Cross-Sell Cohort", self._customer_agent.filter_active_customers(customers)
+
+        if opportunity_type in ("aov_basket_builder", "basket_builder"):
+            return "New", [c for c in customers if c.total_orders_count >= 2]
+
+        return "Cross-Sell Cohort", self._customer_agent.filter_active_customers(customers)
 
     async def execute_tool(
         self,
@@ -136,15 +163,40 @@ class ToolRegistry:
         if tool_name == "detect_opportunities":
             resolved_id, customers, orders, payments, products = await self._resolve_merchant_records(session, merchant_id)
             opps = detect_all_opportunities(resolved_id, customers, orders, payments, {p.id: p.category for p in products})
-            return {"opportunities_found": len(opps), "opportunities": [{"id": o.id, "title": o.title, "type": o.opportunity_type, "estimated_gmv": o.estimated_gmv_impact, "confidence": o.confidence_score} for o in opps]}
+            # Persist so the ids handed back are launchable: without this an agentic scan
+            # surfaces opportunity ids that do not exist, and /campaigns/launch 404s.
+            if opps:
+                ranked = sorted(opps, key=lambda o: o.estimated_gmv_impact * o.confidence_score, reverse=True)
+                session.add_all(ranked)
+                await session.flush()
+                opps = ranked
+            return {
+                "opportunities_found": len(opps),
+                "opportunities": [
+                    {
+                        "id": o.id,
+                        "title": o.title,
+                        "type": o.opportunity_type,
+                        "audience_count": o.target_audience_count,
+                        "estimated_gmv": o.estimated_gmv_impact,
+                        "confidence": o.confidence_score,
+                    }
+                    for o in opps
+                ],
+            }
 
         if tool_name == "select_audience":
             opp_type = arguments.get("opportunity_type", "customer_churn_prevention")
             _, customers, _, _, _ = await self._resolve_merchant_records(session, merchant_id)
-            target_segment = "VIP Dormant" if opp_type == "customer_churn_prevention" else "Cross-Sell Cohort"
-            selected = self._customer_agent.filter_dormant_high_value_customers(customers) if opp_type == "customer_churn_prevention" else self._customer_agent.filter_active_customers(customers)
+            target_segment, selected = self._select_cohort_for_opportunity(opp_type, customers)
             aud = self._customer_agent.build_structured_audience("agentic_opp", target_segment, selected)
-            return {"target_segment": target_segment, "audience_count": aud.total_audience_count, "avg_spend": sum(c.total_spend for c in aud.target_customers) / max(1, len(aud.target_customers)), "reasoning": aud.reasoning}
+            return {
+                "target_segment": target_segment,
+                "opportunity_type": opp_type,
+                "audience_count": aud.total_audience_count,
+                "avg_spend": sum(c.total_spend for c in aud.target_customers) / max(1, len(aud.target_customers)),
+                "reasoning": aud.reasoning,
+            }
 
         if tool_name == "recommend_offer":
             segment = arguments.get("segment", "VIP Dormant")
@@ -160,13 +212,34 @@ class ToolRegistry:
         if tool_name == "check_permission_gate":
             customers = (await session.execute(select(CustomerModel).where(CustomerModel.merchant_id == merchant_id))).scalars().all()
             total_gmv = sum(c.total_spend_amount for c in customers)
-            thresholds = permission_gate_service.calculate_dynamic_thresholds(len(customers), total_gmv, float(arguments.get("average_spend", 3500.0)), arguments.get("target_segment", "VIP Dormant"))
+            # Derive average spend from live records rather than a magic default: this value
+            # is not part of the tool schema, so the model cannot supply it, and a hardcoded
+            # fallback would compute a safety threshold from fabricated input.
+            derived_avg_spend = total_gmv / max(1, len(customers))
+            avg_spend = float(arguments.get("average_spend") or derived_avg_spend)
+            thresholds = permission_gate_service.calculate_dynamic_thresholds(len(customers), total_gmv, avg_spend, arguments.get("target_segment", "VIP Dormant"))
             max_disc = thresholds.get("max_discount_percentage", 20.0)
             max_aud = thresholds.get("max_auto_audience", 50.0)
             disc_val = float(arguments.get("discount_value", 15.0))
             aud_cnt = int(arguments.get("audience_count", 50))
             is_safe = disc_val <= max_disc and aud_cnt <= max_aud
-            return {"is_safe": is_safe, "thresholds": thresholds, "policy_status": "auto_approved" if is_safe else "requires_merchant_approval"}
+            return {
+                "is_safe": is_safe,
+                "thresholds": thresholds,
+                "evaluated_against": {
+                    "total_customers": len(customers),
+                    "total_gmv_inr": round(total_gmv, 2),
+                    "average_spend_inr": round(avg_spend, 2),
+                    "target_segment": arguments.get("target_segment", "VIP Dormant"),
+                },
+                "proposed": {"discount_value": disc_val, "audience_count": aud_cnt},
+                "breach_reason": (
+                    None if is_safe
+                    else f"discount {disc_val}% > {max_disc}% cap" if disc_val > max_disc
+                    else f"audience {aud_cnt} > {int(max_aud)} auto-approval cap"
+                ),
+                "policy_status": "auto_approved" if is_safe else "requires_merchant_approval",
+            }
 
         return {"error": f"Tool '{tool_name}' not recognized"}
 

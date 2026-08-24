@@ -151,7 +151,7 @@ export const SessionSwitcher: React.FC<SessionSwitcherProps> = ({
                           </span>
                         )}
                       </div>
-                      <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                      <span className="text-[10px] text-[var(--text-muted)] font-mono" suppressHydrationWarning>
                         {sess.last_updated
                           ? new Date(sess.last_updated.endsWith("Z") || sess.last_updated.includes("+") ? sess.last_updated : `${sess.last_updated}Z`).toLocaleTimeString("en-IN", {
                               timeZone: "Asia/Kolkata",
