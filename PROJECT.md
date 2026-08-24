@@ -1,20 +1,20 @@
-# RazorGrowth AI — Project Specification & Mission Statement 🎯
+# RazorGrowth AI — Project Specification & Mission Statement
 
 ---
 
-## 1. Executive Vision & Final Goal
+## 1. Executive Vision & System Goal
 
 **RazorGrowth AI** is an autonomous AI Growth Manager for merchants on the Razorpay ecosystem. It moves beyond passive reporting dashboards and conversational chatbots by closing the loop between data intelligence and real commerce actions:
 
 $$\mathbf{Observe} \longrightarrow \mathbf{Understand} \longrightarrow \mathbf{Find\ Opportunity} \longrightarrow \mathbf{Decide} \longrightarrow \mathbf{Act} \longrightarrow \mathbf{Measure} \longrightarrow \mathbf{Learn}$$
 
-### The Final Hackathon Goal (Track 1: AI Growth & Agentic Commerce)
-1. **Connect Razorpay Test Mode**: Ingest real payment lifecycle events (Orders, Payments, Webhooks, Refunds).
-2. **Synthesize Merchant Ecosystem**: Simulate customer demographics, product catalog, and historical orders with seeded behavioral patterns.
+### Core Operational Objectives
+1. **Connect Razorpay Integration**: Ingest real payment lifecycle events (Orders, Payments, Webhooks, Refunds).
+2. **Synthesize Merchant Ecosystem**: Model customer demographics, product catalog, and historical orders with seeded behavioral patterns.
 3. **Build Customer 360**: Maintain unified behavioral and RFM metrics for every customer profile.
 4. **Discover High-ROI Opportunities**: Autonomously detect revenue leakages (e.g., dormant VIP cohorts, cross-sell affinities, payment method drop-offs).
 5. **Formulate & Execute Campaigns**: Generate personalized incentives (e.g., discount coupons) and dispatch targeted multi-channel communications.
-6. **Simulate Conversions via Razorpay**: Trigger real Razorpay test transactions when targeted customers purchase.
+6. **Execute Conversions via Razorpay**: Trigger real Razorpay test transactions when targeted customers purchase.
 7. **Mathematically Quantify GMV Lift**: Run rigorous A/B experiments (treatment vs. control) to measure net incremental revenue generated.
 
 ---
@@ -23,9 +23,10 @@ $$\mathbf{Observe} \longrightarrow \mathbf{Understand} \longrightarrow \mathbf{F
 
 All developers and AI coding agents must align implementation details with the documents inside the [`docs/`](file:///c:/Users/ffmou/Desktop/razorpay/docs) directory:
 
-* 🏗️ **[System Architecture](file:///c:/Users/ffmou/Desktop/razorpay/docs/ARCHITECTURE.md)**: Deep dive into the 8 layers, domain event bus, Razorpay sandbox integration, and the autonomous growth loop.
-* 📋 **[File Inventory & Implementation Status](file:///c:/Users/ffmou/Desktop/razorpay/docs/FILE_INVENTORY_AND_STATUS.md)**: Exhaustive audit of all 29 codebase files, their production purpose, current implementation, and status classification (`[INTEGRATED]`, `[SCAFFOLD / HEURISTIC]`, `[SIMULATION / MOCKED]`).
-* 🏆 **[Hackathon Presentation Runbook](file:///c:/Users/ffmou/Desktop/razorpay/docs/HACKATHON_RUNBOOK.md)**: 7-step guide detailing the end-to-end judge demonstration flow.
+* **[System Architecture](file:///c:/Users/ffmou/Desktop/razorpay/docs/ARCHITECTURE.md)**: Deep dive into the 9 layers, domain event bus, Razorpay integration, observability stack, and the autonomous growth loop.
+* **[File Inventory & Implementation Status](file:///c:/Users/ffmou/Desktop/razorpay/docs/FILE_INVENTORY_AND_STATUS.md)**: Exhaustive audit of all codebase files, their production purpose, current implementation, and status classification (`[INTEGRATED]`, `[SCAFFOLD / HEURISTIC]`, `[SIMULATION / MOCKED]`).
+* **[Multi-Agent System](file:///c:/Users/ffmou/Desktop/razorpay/docs/AGENTS.md)**: Specifications for specialized domain agents, ReAct loop, consensus builder, and Permission Gates.
+
 
 ---
 

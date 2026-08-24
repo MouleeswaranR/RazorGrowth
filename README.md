@@ -7,15 +7,13 @@
 
 | Topic | Documentation Link | Key Coverage |
 |:---|:---|:---|
-| **📊 Evaluation Report** | [docs/EVALUATION_REPORT.md](docs/EVALUATION_REPORT.md) | **Comprehensive scoring: 9.2/10 overall, hackathon win probability 85-95%** |
-| **⚡ Quick Evaluation Summary** | [docs/EVALUATION_SUMMARY.md](docs/EVALUATION_SUMMARY.md) | **One-page scorecard with strengths, metrics, and judge demo prep** |
-| **System Architecture** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 8-layer stack, ERD models, Razorpay integration, asyncpg engine |
+| **System Architecture** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 9-layer stack, ERD models, Razorpay integration, asyncpg engine, observability |
 | **Autonomous Workflow** | [docs/WORKFLOW.md](docs/WORKFLOW.md) | 7-stage closed loop, sequence diagrams, live payload examples |
-| **Multi-Agent System** | [docs/AGENTS.md](docs/AGENTS.md) | Multi-provider LLM cascade, ReAct tool loop, specialized agents |
+| **Multi-Agent System** | [docs/AGENTS.md](docs/AGENTS.md) | Multi-provider LLM cascade, ReAct tool loop, consensus builder, specialized agents |
 | **Intelligence Layer** | [docs/INTELLIGENCE.md](docs/INTELLIGENCE.md) | RFM segmentation, Churn decay model, CLV, Co-purchase affinity |
-| **Judging & Demo Runbook** | [docs/HACKATHON_RUNBOOK.md](docs/HACKATHON_RUNBOOK.md) | Step-by-step judge walkthrough, live webhook testing |
 | **File Inventory & Status** | [docs/FILE_INVENTORY_AND_STATUS.md](docs/FILE_INVENTORY_AND_STATUS.md) | Verified integration status across all backend and frontend files |
-| **Hackathon Project Spec** | [PROJECT.md](PROJECT.md) | Razorpay Hackathon Track 1 core requirements & criteria |
+| **System Specification** | [PROJECT.md](PROJECT.md) | Architecture specification, goals, and technical guidelines |
+
 
 ---
 
