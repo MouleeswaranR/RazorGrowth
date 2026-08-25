@@ -8,7 +8,17 @@ from app.services.live_experiment_service import live_experiment_service
 
 router = APIRouter(prefix="/webhooks", tags=["Razorpay Webhooks"])
 
+from sqlalchemy import select
+from app.models.webhook_event import WebhookEventModel
+
 _recent_webhooks: list = []
+
+
+def append_recent_webhook(event: dict) -> None:
+    """Appends an event to the in-memory recent webhooks buffer."""
+    _recent_webhooks.insert(0, event)
+    if len(_recent_webhooks) > 50:
+        _recent_webhooks.pop()
 
 
 @router.post("/razorpay")
@@ -25,10 +35,7 @@ async def handle_razorpay_webhook(
 
     payload = await request.json()
     parsed_event = razorpay_webhook_handler.extract_event_payload(payload)
-
-    _recent_webhooks.append(parsed_event)
-    if len(_recent_webhooks) > 50:
-        _recent_webhooks.pop(0)
+    append_recent_webhook(parsed_event)
 
     # Persist and recalculate live metrics in PostgreSQL
     result = await live_experiment_service.record_webhook_payment(session, parsed_event)
@@ -45,9 +52,36 @@ async def handle_razorpay_webhook(
 
 
 @router.get("/recent")
-async def get_recent_webhooks() -> dict:
-    """Returns the buffer of recently received Razorpay webhooks."""
-    return {"total": len(_recent_webhooks), "events": _recent_webhooks[-10:]}
+async def get_recent_webhooks(
+    session: AsyncSession = Depends(get_database_session),
+) -> dict:
+    """Returns recently received Razorpay webhooks from database and in-memory buffer."""
+    db_events = []
+    try:
+        stmt = select(WebhookEventModel).order_by(WebhookEventModel.created_at.desc()).limit(30)
+        rows = (await session.execute(stmt)).scalars().all()
+        for r in rows:
+            p = dict(r.payload or {})
+            p.setdefault("event", r.event_name)
+            p.setdefault("payment_id", r.razorpay_event_id or r.id)
+            p.setdefault("created_at", r.created_at.isoformat() if r.created_at else None)
+            db_events.append(p)
+    except Exception:
+        pass
+
+    # Merge in-memory and database events, deduplicating by payment_id
+    seen_ids = set()
+    combined = []
+    for ev in list(_recent_webhooks) + db_events:
+        pid = ev.get("payment_id") or ev.get("id")
+        if pid and pid in seen_ids:
+            continue
+        if pid:
+            seen_ids.add(pid)
+        combined.append(ev)
+
+    return {"total": len(combined), "events": combined[:20]}
+
 
 
 @router.post("/simulate-test-event")

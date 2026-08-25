@@ -61,6 +61,11 @@ async def record_test_webhook_payment(
     }
 
     metrics = await live_experiment_service.record_webhook_payment(session, event_payload)
+    try:
+        from app.api.routes_webhooks import append_recent_webhook
+        append_recent_webhook(event_payload)
+    except Exception:
+        pass
 
     trace_logger_service.log_trace_step(
         run_id=campaign_id,
