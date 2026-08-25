@@ -185,3 +185,15 @@ body {
 .animate-fade-in {
   animation: fadeInSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Hide Next.js Dev Badge and Static Indicator on Bottom Corner */
+[data-nextjs-toast],
+nextjs-portal,
+#__next-build-watcher,
+div[data-nextjs-dev-overlay-portal] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+

@@ -18,30 +18,28 @@ import { Opportunity, ExperimentMetrics, CheckoutSession, OfferDetails, Permissi
 interface OpportunityCardProps {
   opportunity: Opportunity;
   isLaunched: boolean;
-  isPaid: boolean;
   isLaunching?: boolean;
   isPaying?: boolean;
   isPendingGate?: boolean;
   pendingGate?: PermissionGateInfo | null;
   metrics?: ExperimentMetrics;
-  checkoutSession?: CheckoutSession;
+  checkoutSessions?: CheckoutSession[];
   offer?: OfferDetails;
   onLaunch: (opportunityId: string) => void;
   onConfirmSafeCap?: (opportunityId: string) => void;
   onConfirmOverride?: (opportunityId: string) => void;
-  onTriggerPayment: (opportunityId: string) => void;
+  onTriggerPayment: (opportunityId: string, checkoutSession: CheckoutSession) => void;
 }
 
 export const OpportunityCard: React.FC<OpportunityCardProps> = ({
   opportunity,
   isLaunched,
-  isPaid,
   isLaunching = false,
   isPaying = false,
   isPendingGate = false,
   pendingGate = null,
   metrics,
-  checkoutSession,
+  checkoutSessions = [],
   offer,
   onLaunch,
   onConfirmSafeCap,
@@ -49,6 +47,9 @@ export const OpportunityCard: React.FC<OpportunityCardProps> = ({
   onTriggerPayment,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
+  const [selectedVariant, setSelectedVariant] = useState<"treatment" | "control">("treatment");
+  const checkoutSession = checkoutSessions.find((session) => session.variant === selectedVariant)
+    || checkoutSessions[0];
 
   return (
     <div
@@ -282,6 +283,15 @@ export const OpportunityCard: React.FC<OpportunityCardProps> = ({
                 <div className="text-xs font-semibold text-[var(--text-primary)]">
                   Live Razorpay Test Order Seeded
                 </div>
+                <select
+                  aria-label="Experiment cohort"
+                  value={selectedVariant}
+                  onChange={(event) => setSelectedVariant(event.target.value as "treatment" | "control")}
+                  className="mt-1 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 text-[10px] text-[var(--text-secondary)]"
+                >
+                  <option value="treatment">Treatment checkout (offer)</option>
+                  <option value="control">Control checkout (normal price)</option>
+                </select>
                 <div className="text-[11px] text-[var(--text-muted)] font-mono-code">
                   {checkoutSession
                     ? `Order: ${checkoutSession.razorpay_order_id} (${checkoutSession.customer_name || "Customer"} - ₹${checkoutSession.amount.toLocaleString("en-IN")})`
@@ -290,32 +300,17 @@ export const OpportunityCard: React.FC<OpportunityCardProps> = ({
               </div>
             </div>
 
-            <div>
-              {isPaid ? (
-                <div className="badge-claude badge-emerald text-xs py-1.5 px-3">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>[COMPLETED] Webhook Verified in PostgreSQL</span>
-                </div>
+            <button
+              onClick={() => checkoutSession && onTriggerPayment(opportunity.id, checkoutSession)}
+              disabled={isPaying || !checkoutSession}
+              className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-[var(--accent-emerald)] hover:bg-emerald-700 text-white shadow-sm transition-all duration-150 cursor-pointer w-full sm:w-auto disabled:opacity-50"
+            >
+              {isPaying ? (
+                <><Loader2 className="w-3.5 h-3.5 animate-spin" /><span>Verifying Payment...</span></>
               ) : (
-                <button
-                  onClick={() => onTriggerPayment(opportunity.id)}
-                  disabled={isPaying}
-                  className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-[var(--accent-emerald)] hover:bg-emerald-700 text-white shadow-sm transition-all duration-150 cursor-pointer w-full sm:w-auto disabled:opacity-50"
-                >
-                  {isPaying ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Verifying Payment...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Complete Razorpay Test Payment (Live Webhook)</span>
-                    </>
-                  )}
-                </button>
+                <><Play className="w-3.5 h-3.5 fill-current" /><span>Record {selectedVariant} Test Payment</span></>
               )}
-            </div>
+            </button>
           </div>
         </div>
       )}

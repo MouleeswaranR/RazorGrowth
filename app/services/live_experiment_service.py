@@ -17,7 +17,8 @@ class LiveExperimentService:
         treatment_customers: list[dict],
         control_customers: list[dict],
         merchant_id: str,
-        offer_amount: float,
+        treatment_amount: float,
+        control_amount: float,
         session_id: str | None = None,
     ) -> list[dict]:
         """Creates Razorpay test orders for treatment cohort and records experiment assignments."""
@@ -27,7 +28,8 @@ class LiveExperimentService:
             treatment_customers=treatment_customers,
             control_customers=control_customers,
             merchant_id=merchant_id,
-            offer_amount=offer_amount,
+            treatment_amount=treatment_amount,
+            control_amount=control_amount,
             session_id=session_id,
         )
 

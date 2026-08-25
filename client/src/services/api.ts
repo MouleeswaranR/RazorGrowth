@@ -132,7 +132,9 @@ export async function triggerWebhookPayment(
   campaignId: string,
   customerId: string,
   amount: number = 2850.0,
-  sessionId?: string
+  sessionId?: string,
+  variant: "treatment" | "control" = "treatment",
+  orderId?: string,
 ): Promise<{
   status: string;
   payment_id: string;
@@ -144,7 +146,9 @@ export async function triggerWebhookPayment(
     campaign_id: campaignId,
     customer_id: customerId,
     amount: amount.toString(),
+    variant,
   });
+  if (orderId) params.set("order_id", orderId);
   if (sessionId) params.set("session_id", sessionId);
 
   const res = await apiFetch(`/experiments/webhook-payment?${params.toString()}`, {
@@ -198,13 +202,17 @@ export async function simulateWebhookEvent(
   campaignId: string,
   customerId: string,
   amount: number = 2850,
-  sessionId?: string
+  sessionId?: string,
+  variant: "treatment" | "control" = "treatment",
+  orderId?: string,
 ): Promise<any> {
   const params = new URLSearchParams({
     campaign_id: campaignId,
     customer_id: customerId,
     amount: amount.toString(),
+    variant,
   });
+  if (orderId) params.set("order_id", orderId);
   if (sessionId) params.set("session_id", sessionId);
 
   const res = await apiFetch(
@@ -344,4 +352,3 @@ export async function crossReferenceSessions(
   if (!res.ok) throw new Error(`Cross-referencing failed: ${res.statusText}`);
   return res.json();
 }
-

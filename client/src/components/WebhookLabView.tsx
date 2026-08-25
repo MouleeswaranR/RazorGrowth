@@ -31,6 +31,7 @@ export const WebhookLabView: React.FC<WebhookLabViewProps> = ({
   const [simCampaignId, setSimCampaignId] = useState<string>("cmp_demo");
   const [simCustomerId, setSimCustomerId] = useState<string>("cust_001");
   const [simAmount, setSimAmount] = useState<number>(2850);
+  const [simVariant, setSimVariant] = useState<"treatment" | "control">("treatment");
   const [simResult, setSimResult] = useState<any>(null);
   const [copied, setCopied] = useState(false);
 
@@ -59,7 +60,8 @@ export const WebhookLabView: React.FC<WebhookLabViewProps> = ({
         simCampaignId,
         simCustomerId,
         simAmount,
-        sessionId
+        sessionId,
+        simVariant,
       );
       setSimResult(res);
       fetchWebhooks();
@@ -146,6 +148,20 @@ export const WebhookLabView: React.FC<WebhookLabViewProps> = ({
           </div>
 
           <div className="space-y-3 text-xs">
+            <div>
+              <label className="block text-[var(--text-muted)] mb-1 font-medium">
+                Cohort Variant
+              </label>
+              <select
+                value={simVariant}
+                onChange={(event) => setSimVariant(event.target.value as "treatment" | "control")}
+                className="w-full px-3 py-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-primary)] text-xs focus:outline-none focus:border-[var(--accent-terracotta)]"
+              >
+                <option value="treatment">Treatment (offer checkout)</option>
+                <option value="control">Control (normal checkout)</option>
+              </select>
+            </div>
+
             <div>
               <label className="block text-[var(--text-muted)] mb-1 font-medium">
                 Campaign ID (matches experiment assignment)

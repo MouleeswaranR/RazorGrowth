@@ -36,10 +36,13 @@ async def test_full_autonomous_growth_api_loop():
         assert launch_data["emails_dispatched"] >= 0
 
         # 5. Trigger a real test payment via webhook lifecycle (no simulation)
-        target_customer_id = "cust_" + merchant_id[6:14]
+        checkout_session = launch_data["checkout_sessions"][0]
         pay_res = await client.post(
             f"/api/v1/experiments/webhook-payment"
-            f"?campaign_id={campaign_id}&customer_id={target_customer_id}&amount=2850"
+            f"?campaign_id={campaign_id}&customer_id={checkout_session['customer_id']}"
+            f"&variant={checkout_session['variant']}"
+            f"&order_id={checkout_session['razorpay_order_id']}"
+            f"&amount={checkout_session['amount']}"
         )
         assert pay_res.status_code == 200
         pay_data = pay_res.json()

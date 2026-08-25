@@ -20,93 +20,80 @@ class ExperimentOrderCreator:
         treatment_customers: list[dict],
         control_customers: list[dict],
         merchant_id: str,
-        offer_amount: float,
+        treatment_amount: float,
+        control_amount: float,
         session_id: str | None = None,
     ) -> list[dict]:
         """Creates Razorpay test orders for treatment cohort and records initial experiment assignments."""
         from app.integrations.razorpay_client import razorpay_client
 
-        offer_amount = round(float(offer_amount), 2)
-        prod_id = await self._ensure_product_exists(session, merchant_id, offer_amount)
+        treatment_amount = round(float(treatment_amount), 2)
+        control_amount = round(float(control_amount), 2)
+        prod_id = await self._ensure_product_exists(session, merchant_id, control_amount)
 
         checkout_sessions = []
         orders_to_create = []
         assignments_to_create = []
 
-        # Process Treatment Cohort (Assigned + Razorpay Test Orders with rate-limit pacing)
-        for idx, c in enumerate(treatment_customers):
-            cust_id = c.get("id") or c.get("customer_id")
-            amount_in_paise = max(100, int(offer_amount * 100))
-            notes = {
-                "campaign_id": str(campaign_id),
-                "customer_id": str(cust_id),
-                "variant": "treatment",
-                "session_id": str(session_id or ""),
-            }
+        cohorts = (("treatment", treatment_customers), ("control", control_customers))
+        for variant, customers in cohorts:
+            for idx, c in enumerate(customers):
+                cust_id = c.get("id") or c.get("customer_id")
+                checkout_amount = treatment_amount if variant == "treatment" else control_amount
+                amount_in_paise = max(100, int(checkout_amount * 100))
+                notes = {
+                    "campaign_id": str(campaign_id),
+                    "customer_id": str(cust_id),
+                    "variant": variant,
+                    "session_id": str(session_id or ""),
+                }
 
-            rzp_order_id = None
-            is_mock_order = False
-            # Call live Razorpay API with graceful rate-limit handling
-            try:
-                rzp_order = razorpay_client.create_order(
-                    amount_in_paise=amount_in_paise,
-                    receipt=f"rcpt_{cust_id[:8]}",
-                    notes=notes,
-                )
-                rzp_order_id = rzp_order.get("id")
-                is_mock_order = bool(rzp_order.get("is_mock", False))
-                if idx < 10:
-                    await asyncio.sleep(0.06)
-            except Exception as rzp_err:
-                logger.warning(f"Razorpay order creation fallback: {rzp_err}")
-                rzp_order_id = f"order_mock_{uuid.uuid4().hex[:12]}"
-                is_mock_order = True
+                rzp_order_id = None
+                is_mock_order = False
+                try:
+                    rzp_order = razorpay_client.create_order(
+                        amount_in_paise=amount_in_paise,
+                        receipt=f"rcpt_{variant}_{cust_id[:8]}",
+                        notes=notes,
+                    )
+                    rzp_order_id = rzp_order.get("id")
+                    is_mock_order = bool(rzp_order.get("is_mock", False))
+                    if idx < 10:
+                        await asyncio.sleep(0.06)
+                except Exception as rzp_err:
+                    logger.warning(f"Razorpay order creation fallback: {rzp_err}")
+                    rzp_order_id = f"order_mock_{uuid.uuid4().hex[:12]}"
+                    is_mock_order = True
 
-            order_id = f"ord_{uuid.uuid4().hex[:12]}"
-            order = OrderModel(
-                id=order_id,
-                merchant_id=merchant_id,
-                customer_id=cust_id,
-                product_id=prod_id,
-                razorpay_order_id=rzp_order_id,
-                amount=offer_amount,
-                status="pending_checkout",
-            )
-            orders_to_create.append(order)
-
-            assignment = ExperimentAssignmentModel(
-                id=f"asgn_{uuid.uuid4().hex[:12]}",
-                campaign_id=campaign_id,
-                customer_id=cust_id,
-                variant="treatment",
-                is_converted=False,
-                conversion_amount=0.0,
-            )
-            assignments_to_create.append(assignment)
-
-            checkout_sessions.append({
-                "order_id": order_id,
-                "razorpay_order_id": rzp_order_id,
-                "customer_id": cust_id,
-                "customer_name": c.get("name", "Merchant Customer"),
-                "customer_email": c.get("email", "customer@example.com"),
-                "amount": offer_amount,
-                "variant": "treatment",
-                "is_mock": is_mock_order,
-            })
-
-        # Process Control Cohort (Assigned baseline)
-        for c in control_customers:
-            cust_id = c.get("id") or c.get("customer_id")
-            assignment = ExperimentAssignmentModel(
-                id=f"asgn_{uuid.uuid4().hex[:12]}",
-                campaign_id=campaign_id,
-                customer_id=cust_id,
-                variant="control",
-                is_converted=False,
-                conversion_amount=0.0,
-            )
-            assignments_to_create.append(assignment)
+                order_id = f"ord_{uuid.uuid4().hex[:12]}"
+                orders_to_create.append(OrderModel(
+                    id=order_id,
+                    merchant_id=merchant_id,
+                    customer_id=cust_id,
+                    product_id=prod_id,
+                    razorpay_order_id=rzp_order_id,
+                    amount=checkout_amount,
+                    status="pending_checkout",
+                ))
+                assignments_to_create.append(ExperimentAssignmentModel(
+                    id=f"asgn_{uuid.uuid4().hex[:12]}",
+                    campaign_id=campaign_id,
+                    customer_id=cust_id,
+                    variant=variant,
+                    razorpay_order_id=rzp_order_id,
+                    is_converted=False,
+                    conversion_amount=0.0,
+                ))
+                checkout_sessions.append({
+                    "order_id": order_id,
+                    "razorpay_order_id": rzp_order_id,
+                    "customer_id": cust_id,
+                    "customer_name": c.get("name", "Merchant Customer"),
+                    "customer_email": c.get("email", "customer@example.com"),
+                    "amount": checkout_amount,
+                    "variant": variant,
+                    "is_mock": is_mock_order,
+                })
 
         if orders_to_create:
             session.add_all(orders_to_create)

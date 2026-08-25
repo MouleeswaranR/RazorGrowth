@@ -55,7 +55,7 @@ def test_razorpay_webhook_handler_extract_notes():
 
 @pytest.mark.anyio
 async def test_webhook_simulate_endpoint():
-    """Validates that simulated test webhook endpoint records payment and recalculates metrics."""
+    """Rejects simulated webhooks that do not map to a saved experiment assignment."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -66,10 +66,8 @@ async def test_webhook_simulate_endpoint():
                 "amount": 2850.0,
             },
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "simulated_webhook_processed"
-        assert data["event"]["payment_id"].startswith("pay_")
+        assert response.status_code == 422
+        assert response.json()["detail"] == "No experiment assignment matches this webhook"
 
 
 @pytest.mark.anyio
@@ -138,4 +136,3 @@ async def test_recalculate_campaign_metrics_returns_sentinel_on_empty_assignment
         await session.delete(merchant)
         await session.commit()
         break
-

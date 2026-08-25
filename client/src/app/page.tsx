@@ -77,7 +77,7 @@ export default function DashboardPage() {
   const [completedPaymentOppIds, setCompletedPaymentOppIds] = useState<Set<string>>(new Set());
   const [campaignMetricsMap, setCampaignMetricsMap] = useState<Record<string, ExperimentMetrics>>({});
   const [campaignOffersMap, setCampaignOffersMap] = useState<Record<string, OfferDetails>>({});
-  const [checkoutSessionsMap, setCheckoutSessionsMap] = useState<Record<string, CheckoutSession>>({});
+  const [checkoutSessionsMap, setCheckoutSessionsMap] = useState<Record<string, CheckoutSession[]>>({});
   const [oppToCampIdMap, setOppToCampIdMap] = useState<Record<string, string>>({});
 
   // Permission Gate Interactive State
@@ -246,7 +246,7 @@ export default function DashboardPage() {
             setCampaignOffersMap({ [step3.opportunity_id]: step3.offer });
           }
           if (step3.checkout_sessions && step3.checkout_sessions.length > 0) {
-            setCheckoutSessionsMap({ [step3.opportunity_id]: step3.checkout_sessions[0] });
+          setCheckoutSessionsMap({ [step3.opportunity_id]: step3.checkout_sessions });
           }
           setCurrentStage(5);
         }
@@ -390,7 +390,7 @@ export default function DashboardPage() {
         if (res.checkout_sessions && res.checkout_sessions.length > 0) {
           setCheckoutSessionsMap((prev) => ({
             ...prev,
-            [opportunityId]: res.checkout_sessions![0],
+            [opportunityId]: res.checkout_sessions!,
           }));
         }
 
@@ -407,17 +407,19 @@ export default function DashboardPage() {
   };
 
   // Handler: Trigger Payment Conversion via Webhook
-  const handleTriggerPayment = async (opportunityId: string) => {
+  const handleTriggerPayment = async (opportunityId: string, checkoutSession?: CheckoutSession) => {
     const campaignId = oppToCampIdMap[opportunityId];
     if (!campaignId) {
       addLog(`[NOTICE] Please launch a campaign first.`);
       return;
     }
 
-    const session = checkoutSessionsMap[opportunityId] || {
+    const session = checkoutSession || checkoutSessionsMap[opportunityId]?.[0] || {
       customer_id: "cust_demo",
       amount: 2850,
       razorpay_order_id: "order_demo",
+      order_id: "order_demo",
+      variant: "treatment" as const,
     };
 
     setPayingOppId(opportunityId);
@@ -428,7 +430,9 @@ export default function DashboardPage() {
         campaignId,
         session.customer_id,
         session.amount,
-        sessionId
+        sessionId,
+        session.variant,
+        session.razorpay_order_id,
       );
 
       setCompletedPaymentOppIds((prev) => new Set(prev).add(opportunityId));
@@ -695,18 +699,17 @@ export default function DashboardPage() {
                     key={opp.id}
                     opportunity={opp}
                     isLaunched={launchedOppIds.has(opp.id)}
-                    isPaid={completedPaymentOppIds.has(opp.id)}
                     isLaunching={launchingOppId === opp.id}
                     isPaying={payingOppId === opp.id}
                     isPendingGate={pendingOpportunityId === opp.id && pendingGate !== null}
                     pendingGate={pendingOpportunityId === opp.id ? pendingGate : null}
                     metrics={campaignMetricsMap[opp.id]}
-                    checkoutSession={checkoutSessionsMap[opp.id]}
+                  checkoutSessions={checkoutSessionsMap[opp.id] || []}
                     offer={campaignOffersMap[opp.id]}
                     onLaunch={(id) => handleLaunchCampaign(id)}
                     onConfirmSafeCap={(id) => handleLaunchCampaign(id, false, safeAudienceCap)}
                     onConfirmOverride={(id) => handleLaunchCampaign(id, true)}
-                    onTriggerPayment={(id) => handleTriggerPayment(id)}
+                  onTriggerPayment={(id, checkout) => handleTriggerPayment(id, checkout)}
                   />
                 ))
               )}

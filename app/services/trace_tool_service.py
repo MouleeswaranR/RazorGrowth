@@ -42,6 +42,7 @@ class TraceToolService:
 
         treatment_size = step3.get("treatment_group_size", int(round(aud_count * 0.8)) if aud_count else 0)
         control_size = step3.get("control_group_size", aud_count - treatment_size if aud_count else 0)
+        step2_plan = step2.get("action_plan") or {}
 
         return {
             "total_audience": aud_count,
@@ -49,10 +50,11 @@ class TraceToolService:
             "control_group_size": control_size,
             "target_segment": target_segment,
             "customer_agent_reasoning": reasoning or "Audience filtered by CustomerAgent based on RFM CLV percentiles and churn risk.",
-            "launched_opportunity": step3.get("opportunity_type", step2.get("action_plan", {}).get("opportunity_title", "VIP Churn Prevention")),
-            "top_opportunity": step2.get("action_plan", {}).get("opportunity_title", "Proactive Churn Intervention"),
-            "conversions_recorded": step4.get("metrics", {}).get("treatment_orders_count", 0),
+            "launched_opportunity": step3.get("opportunity_type") or step2_plan.get("opportunity_title", "VIP Churn Prevention"),
+            "top_opportunity": step2_plan.get("opportunity_title", "Proactive Churn Intervention"),
+            "conversions_recorded": (step4.get("metrics") or {}).get("treatment_orders_count", 0),
         }
+
 
     def get_experiment_lift_summary(self, session_id: str) -> dict:
         """Retrieves statistical A/B test metrics, lift percentages, converted customers, and net incremental GMV."""
@@ -141,8 +143,11 @@ class TraceToolService:
         step3 = steps.get("3_campaign_launch_and_dispatch", {}).get("data", {})
         step4 = steps.get("4_experiment_ab_lift_measurement", {}).get("data", {})
 
+        step2_plan = step2.get("action_plan") or {}
+        step3_gate = step3.get("permission_gate") or {}
+
         growth_mgr = (
-            step2.get("action_plan", {}).get("ai_reasoning")
+            step2_plan.get("ai_reasoning")
             or step2_agentic.get("reasoning_trace")
             or step2_agentic.get("plan_summary")
             or "Evaluated multi-agent diagnostic telemetry to identify highest-ROI growth opportunities."
@@ -152,7 +157,7 @@ class TraceToolService:
             "growth_manager_reasoning": growth_mgr,
             "customer_agent_reasoning": step3.get("audience_reasoning", "Cohort selected based on RFM CLV and churn probability."),
             "offer_agent_reasoning": step3.get("offer_reasoning", "Margin-safe incentive calibrated to preserve profit margins."),
-            "permission_gate_notes": step3.get("permission_gate", {}).get("policy_notes", "Dynamic financial guardrails verified."),
+            "permission_gate_notes": step3_gate.get("policy_notes", "Dynamic financial guardrails verified."),
             "experiment_agent_summary": step4.get("experiment_reasoning", "A/B test measures incremental conversion lift via Razorpay webhooks."),
         }
 
@@ -162,7 +167,7 @@ class TraceToolService:
         step2 = trace.get("steps", {}).get("2_opportunity_scan_and_ai_reasoning", {}).get("data", {})
         step3 = trace.get("steps", {}).get("3_campaign_launch_and_dispatch", {}).get("data", {})
 
-        audience = step2.get("action_plan", {}).get("audience", {})
+        audience = (step2.get("action_plan") or {}).get("audience") or {}
         target_customers = audience.get("target_customers", []) or step3.get("target_customers", [])
 
         return {
@@ -188,14 +193,15 @@ class TraceToolService:
         step4 = trace.get("steps", {}).get("4_experiment_ab_lift_measurement", {}).get("data", {})
         step3 = trace.get("steps", {}).get("3_campaign_launch_and_dispatch", {}).get("data", {})
         step2 = trace.get("steps", {}).get("2_opportunity_scan_and_ai_reasoning", {}).get("data", {})
+        step2_plan = step2.get("action_plan") or {}
 
         converted = step4.get("converted_customers", [])
         captured_gmv = step4.get("captured_gmv", 0.0)
-        incremental_gmv = step4.get("metrics", {}).get("incremental_revenue_inr", 0.0)
+        incremental_gmv = (step4.get("metrics") or {}).get("incremental_revenue_inr", 0.0)
 
         return {
             "total_conversions": len(converted),
-            "opportunity_title": step3.get("opportunity_type", step2.get("action_plan", {}).get("opportunity_title", "Growth Campaign")),
+            "opportunity_title": step3.get("opportunity_type") or step2_plan.get("opportunity_title", "Growth Campaign"),
             "converted_customers": converted,
             "captured_gmv_inr": f"₹{captured_gmv:,.2f}",
             "incremental_gmv_inr": f"₹{incremental_gmv:,.2f}",
@@ -205,6 +211,7 @@ class TraceToolService:
                 else "No customer conversions recorded yet for this session."
             ),
         }
+
 
     def route_and_fetch_relevant_context(self, query: str, session_id: str) -> dict:
         """Selects and returns only the relevant tool payload based on merchant query intent."""

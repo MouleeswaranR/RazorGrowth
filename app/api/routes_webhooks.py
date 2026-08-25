@@ -38,7 +38,10 @@ async def handle_razorpay_webhook(
     append_recent_webhook(parsed_event)
 
     # Persist and recalculate live metrics in PostgreSQL
-    result = await live_experiment_service.record_webhook_payment(session, parsed_event)
+    try:
+        result = await live_experiment_service.record_webhook_payment(session, parsed_event)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     await event_publisher.publish(
         event_type=EventType.PAYMENT_CAPTURED,
@@ -89,6 +92,9 @@ async def simulate_test_webhook_event(
     campaign_id: str,
     customer_id: str,
     amount: float = 2850.0,
+    variant: str = "treatment",
+    order_id: str | None = None,
+    payment_id: str | None = None,
     session_id: str | None = None,
     session: AsyncSession = Depends(get_database_session),
 ) -> dict:
@@ -99,15 +105,15 @@ async def simulate_test_webhook_event(
         "payload": {
             "payment": {
                 "entity": {
-                    "id": f"pay_{uuid.uuid4().hex[:14]}",
-                    "order_id": f"order_{uuid.uuid4().hex[:14]}",
+                    "id": payment_id or f"pay_{uuid.uuid4().hex[:14]}",
+                    "order_id": order_id or f"order_{uuid.uuid4().hex[:14]}",
                     "amount": int(amount * 100),
                     "status": "captured",
                     "method": "upi",
                     "notes": {
                         "campaign_id": campaign_id,
                         "customer_id": customer_id,
-                        "variant": "treatment",
+                        "variant": variant,
                         "session_id": session_id or "",
                     },
                 }
@@ -116,10 +122,12 @@ async def simulate_test_webhook_event(
     }
     parsed = razorpay_webhook_handler.extract_event_payload(mock_payload)
     _recent_webhooks.append(parsed)
-    metrics = await live_experiment_service.record_webhook_payment(session, parsed)
+    try:
+        metrics = await live_experiment_service.record_webhook_payment(session, parsed)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return {
         "status": "simulated_webhook_processed",
         "event": parsed,
         "metrics": metrics,
     }
-

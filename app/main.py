@@ -17,6 +17,14 @@ async def lifespan(app: FastAPI):
     register_default_event_consumers()
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(text(
+            "ALTER TABLE experiment_assignments "
+            "ADD COLUMN IF NOT EXISTS razorpay_order_id VARCHAR(64)"
+        ))
+        await connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_experiment_assignments_razorpay_order_id "
+            "ON experiment_assignments (razorpay_order_id)"
+        ))
     await _warm_up_rag()
     yield
     await engine.dispose()

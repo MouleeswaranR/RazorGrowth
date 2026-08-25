@@ -27,9 +27,29 @@ class WebhookPaymentProcessor:
 
         campaign_id = event_payload.get("campaign_id")
         customer_id = event_payload.get("customer_id")
+        variant = event_payload.get("variant")
         amount = event_payload.get("amount", 0.0)
         payment_id = event_payload.get("payment_id") or f"pay_{uuid.uuid4().hex[:12]}"
         order_id = event_payload.get("order_id") or f"ord_{uuid.uuid4().hex[:12]}"
+
+        existing_payment = await session.scalar(select(PaymentModel).where(
+            PaymentModel.razorpay_payment_id == payment_id
+        ))
+        if existing_payment:
+            return {
+                "status": "payment_already_processed",
+                "payment_id": payment_id,
+                "campaign_id": campaign_id,
+                "session_id": event_payload.get("session_id"),
+            }
+
+        assignment = await self._resolve_experiment_assignment(
+            session, order_id, campaign_id, customer_id, variant
+        )
+        if assignment:
+            campaign_id = assignment.campaign_id
+            customer_id = assignment.customer_id
+            variant = assignment.variant
 
         # Log into webhook_events table in PostgreSQL
         webhook_log = WebhookEventModel(
@@ -59,10 +79,11 @@ class WebhookPaymentProcessor:
         session.add(payment)
 
         # Update experiment assignment conversion in PostgreSQL
-        if campaign_id:
-            await self._update_experiment_assignment(
-                session, campaign_id, customer_id, order.id, amount
-            )
+        if assignment:
+            assignment.is_converted = True
+            assignment.conversion_order_id = order_id
+            assignment.conversion_amount = amount
+            assignment.converted_at = datetime.utcnow()
 
         await session.commit()
 
@@ -184,30 +205,41 @@ class WebhookPaymentProcessor:
             existing_prod_id = new_prod.id
         return existing_prod_id
 
-    async def _update_experiment_assignment(
+    async def _resolve_experiment_assignment(
         self,
         session: AsyncSession,
-        campaign_id: str,
-        customer_id: str,
         order_id: str,
-        amount: float,
-    ) -> None:
-        """Updates experiment assignment with conversion details."""
-        asgn_stmt = select(ExperimentAssignmentModel).where(
-            ExperimentAssignmentModel.campaign_id == campaign_id,
-            ExperimentAssignmentModel.customer_id == customer_id,
-        )
-        asgn = (await session.execute(asgn_stmt)).scalar_one_or_none()
-        if asgn:
-            asgn.is_converted = True
-            asgn.conversion_order_id = order_id
-            asgn.conversion_amount = amount
-            asgn.converted_at = datetime.utcnow()
-        else:
-            logger.warning(
-                f"No assignment found for campaign '{campaign_id}' "
-                f"and customer '{customer_id}'."
-            )
+        campaign_id: str | None,
+        customer_id: str | None,
+        variant: str | None,
+    ) -> ExperimentAssignmentModel | None:
+        """Resolves and validates an experiment assignment from immutable order attribution."""
+        assignment = await session.scalar(select(ExperimentAssignmentModel).where(
+            ExperimentAssignmentModel.razorpay_order_id == order_id
+        ))
+        if not assignment and campaign_id and customer_id:
+            assignment = await session.scalar(select(ExperimentAssignmentModel).where(
+                ExperimentAssignmentModel.campaign_id == campaign_id,
+                ExperimentAssignmentModel.customer_id == customer_id,
+            ))
 
+        if not assignment:
+            if campaign_id:
+                raise ValueError("No experiment assignment matches this webhook")
+            return None
+
+        supplied_values = {
+            "campaign_id": campaign_id,
+            "customer_id": customer_id,
+            "variant": variant,
+        }
+        expected_values = {
+            "campaign_id": assignment.campaign_id,
+            "customer_id": assignment.customer_id,
+            "variant": assignment.variant,
+        }
+        if any(value and value != expected_values[key] for key, value in supplied_values.items()):
+            raise ValueError("Webhook attribution does not match the assigned experiment cohort")
+        return assignment
 
 webhook_payment_processor = WebhookPaymentProcessor()

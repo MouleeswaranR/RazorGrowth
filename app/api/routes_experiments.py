@@ -41,6 +41,9 @@ async def record_test_webhook_payment(
     campaign_id: str,
     customer_id: str,
     amount: float = 2850.0,
+    variant: str = "treatment",
+    order_id: str | None = None,
+    payment_id: str | None = None,
     session_id: str | None = None,
     session: AsyncSession = Depends(get_database_session),
 ) -> dict:
@@ -49,18 +52,21 @@ async def record_test_webhook_payment(
 
     event_payload = {
         "event": "payment.captured",
-        "payment_id": f"pay_{uuid.uuid4().hex[:14]}",
-        "order_id": f"order_{uuid.uuid4().hex[:14]}",
+        "payment_id": payment_id or f"pay_{uuid.uuid4().hex[:14]}",
+        "order_id": order_id or f"order_{uuid.uuid4().hex[:14]}",
         "amount": amount,
         "status": "captured",
         "method": "upi",
         "campaign_id": campaign_id,
         "customer_id": customer_id,
-        "variant": "treatment",
+        "variant": variant,
         "session_id": session_id,
     }
 
-    metrics = await live_experiment_service.record_webhook_payment(session, event_payload)
+    try:
+        metrics = await live_experiment_service.record_webhook_payment(session, event_payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     try:
         from app.api.routes_webhooks import append_recent_webhook
         append_recent_webhook(event_payload)

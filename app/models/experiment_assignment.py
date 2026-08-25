@@ -13,6 +13,7 @@ class ExperimentAssignmentModel(Base):
     campaign_id: Mapped[str] = mapped_column(String(64), ForeignKey("campaigns.id"), index=True)
     customer_id: Mapped[str] = mapped_column(String(64), ForeignKey("customers.id"), index=True)
     variant: Mapped[str] = mapped_column(String(20), default="treatment", index=True)
+    razorpay_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_converted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     conversion_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     conversion_amount: Mapped[float] = mapped_column(Float, default=0.0)

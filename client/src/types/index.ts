@@ -42,11 +42,13 @@ export interface PermissionGateInfo {
 }
 
 export interface CheckoutSession {
+  order_id: string;
   customer_id: string;
   customer_name?: string;
   razorpay_order_id: string;
   amount: number;
-  status: string;
+  variant: "treatment" | "control";
+  is_mock?: boolean;
 }
 
 export interface ExperimentMetrics {
@@ -158,4 +160,3 @@ export interface CrossReferenceResult {
   target_metrics: Record<string, any>;
   vector_memories: Array<{ id?: string; summary: string; metadata?: Record<string, any> }>;
 }
-

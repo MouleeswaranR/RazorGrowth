@@ -153,13 +153,22 @@ async def launch_campaign(
     await session.commit()
 
     from app.services.live_experiment_service import live_experiment_service
+    control_checkout_amount = avg_spend
+    treatment_checkout_amount = avg_spend
+    if structured_offer.discount_type == "percentage":
+        treatment_checkout_amount *= 1 - (structured_offer.discount_value / 100)
+    elif structured_offer.discount_type == "fixed":
+        treatment_checkout_amount -= structured_offer.discount_value
+    treatment_checkout_amount = max(1.0, round(treatment_checkout_amount, 2))
+
     checkout_sessions = await live_experiment_service.create_cohort_test_orders(
         session=session,
         campaign_id=campaign.id,
         merchant_id=opportunity.merchant_id,
         treatment_customers=treatment_group,
         control_customers=control_group,
-        offer_amount=avg_spend,
+        treatment_amount=treatment_checkout_amount,
+        control_amount=control_checkout_amount,
         session_id=session_id,
     )
 
@@ -198,9 +207,11 @@ async def launch_campaign(
         "control_group_size": len(control_group),
         "emails_dispatched": dispatched,
         "offer": structured_offer.model_dump(),
-        "checkout_sessions": checkout_sessions[:5],
+        "checkout_sessions": checkout_sessions[:3] + [
+            checkout for checkout in checkout_sessions
+            if checkout["variant"] == "control"
+        ][:3],
         "total_test_orders": len(checkout_sessions),
         "live_razorpay_orders": len(checkout_sessions) - mock_order_count,
         "mock_razorpay_orders": mock_order_count,
     }
-

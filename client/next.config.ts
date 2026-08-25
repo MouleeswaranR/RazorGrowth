@@ -2,8 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  devIndicators: false,
   // Enable standalone output for Docker deployment
   output: 'standalone',
+
   async rewrites() {
     return [
       {
